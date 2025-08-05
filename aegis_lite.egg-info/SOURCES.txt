@@ -1,0 +1,12 @@
+pyproject.toml
+aegis/__init__.py
+aegis/cli.py
+aegis/database.py
+aegis/scanners.py
+aegis_lite.egg-info/PKG-INFO
+aegis_lite.egg-info/SOURCES.txt
+aegis_lite.egg-info/dependency_links.txt
+aegis_lite.egg-info/entry_points.txt
+aegis_lite.egg-info/requires.txt
+aegis_lite.egg-info/top_level.txt
+tests/test_scan.py

@@ -1,0 +1,17 @@
+[project]
+name = "aegis-lite"
+version = "0.1.0"
+description = "Ethical attack surface scanner for SMEs"
+authors = [{ name = "vinayak", email = "vinayak4x@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1.7",
+    "psutil>=6.0.0",
+]
+
+[project.scripts]
+aegis = "aegis.cli:cli"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

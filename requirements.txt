@@ -1,0 +1,4 @@
+click==8.1.7
+pytest==8.3.2
+psutil===6.0.0
+
