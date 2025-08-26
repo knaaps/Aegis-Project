@@ -4,5 +4,7 @@ Version: 0.1.0
 Summary: Ethical attack surface scanner for SMEs
 Author-email: vinayak <vinayak4x@gmail.com>
 Requires-Python: >=3.10
+License-File: LICENSE
 Requires-Dist: click>=8.1.7
 Requires-Dist: psutil>=6.0.0
+Dynamic: license-file

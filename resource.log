@@ -99,3 +99,13 @@ Fri Aug  1 11:37:58 2025,0.5,12.6
 Time,CPU_Percent,RAM_Percent
 Fri Aug  1 11:42:10 2025,0.5,12.4
 --- Scan for google.com finished at Fri Aug  1 11:42:10 2025 ---
+
+--- Scan for example.com started at Tue Aug 26 21:35:13 2025 ---
+Time,CPU_Percent,RAM_Percent
+Tue Aug 26 21:35:13 2025,1.5,20.9
+Tue Aug 26 21:35:13 2025,25.0,20.9
+Tue Aug 26 21:35:13 2025,0.0,20.9
+Tue Aug 26 21:35:13 2025,0.0,20.9
+Tue Aug 26 21:35:14 2025,1.4,21.0
+Tue Aug 26 21:35:14 2025,0.0,21.0
+--- Scan for example.com finished at Tue Aug 26 21:35:14 2025 ---

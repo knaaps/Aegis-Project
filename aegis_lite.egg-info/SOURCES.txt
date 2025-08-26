@@ -1,3 +1,5 @@
+LICENSE
+README.md
 pyproject.toml
 aegis/__init__.py
 aegis/cli.py
