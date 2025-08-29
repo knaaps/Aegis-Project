@@ -109,3 +109,13 @@ Tue Aug 26 21:35:13 2025,0.0,20.9
 Tue Aug 26 21:35:14 2025,1.4,21.0
 Tue Aug 26 21:35:14 2025,0.0,21.0
 --- Scan for example.com finished at Tue Aug 26 21:35:14 2025 ---
+
+--- Scan for example.com started at Fri Aug 29 22:21:02 2025 ---
+Time,CPU_Percent,RAM_Percent
+Fri Aug 29 22:21:03 2025,2.1,29.0
+Fri Aug 29 22:21:03 2025,0.0,29.0
+Fri Aug 29 22:21:03 2025,0.0,29.0
+Fri Aug 29 22:21:03 2025,0.0,29.0
+Fri Aug 29 22:21:03 2025,2.0,29.1
+Fri Aug 29 22:21:03 2025,33.3,29.1
+--- Scan for example.com finished at Fri Aug 29 22:21:03 2025 ---

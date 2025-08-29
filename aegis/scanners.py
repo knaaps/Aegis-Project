@@ -3,14 +3,22 @@ import random
 
 class MockScanner:
     """
-    Mocks external scanning tools like Subfinder and port scanners.
-    In a real scenario, these methods would execute actual CLI tools
-    or leverage more sophisticated Python libraries for network scanning.
+    A class that provides mock implementations for external scanning tools.
+
+    This class is used for testing and development purposes to simulate the
+    behavior of real-world tools like Subfinder and Nmap without making
+    actual network requests. In a production environment, these methods
+    would be replaced by functions that execute actual CLI tools.
     """
     def enumerate_subdomains(self, domain: str) -> list[str]:
         """
         Mocks subdomain enumeration for a given domain.
-        Returns a list of subdomains.
+
+        Args:
+            domain (str): The domain to enumerate subdomains for.
+
+        Returns:
+            list[str]: A list of mock subdomains for the given domain.
         """
         # print(f"DEBUG: Mocking subdomain enumeration for {domain}") # Moved to cli.py for better control
         time.sleep(0.5) # Simulate some work
@@ -38,8 +46,17 @@ class MockScanner:
     def scan_ports(self, target: str, rate_limit: int = None) -> str:
         """
         Mocks port scanning for a given target (subdomain or IP).
-        Returns a comma-separated string of open ports.
-        Ensures a non-None string is always returned.
+
+        This method simulates scanning common ports and returns a string
+        of comma-separated open ports.
+
+        Args:
+            target (str): The subdomain or IP address to scan.
+            rate_limit (int, optional): An optional rate limit in requests
+                                        per second. Defaults to None.
+
+        Returns:
+            str: A comma-separated string of mock open ports.
         """
         # print(f"DEBUG: Mocking port scan for {target} (rate_limit: {rate_limit})") # Moved to cli.py
         time.sleep(0.2) # Simulate some work

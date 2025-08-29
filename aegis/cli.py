@@ -1,3 +1,10 @@
+"""
+Aegis-Lite: Command-Line Interface (CLI) for the Ethical Attack Surface Scanner.
+
+This module provides a user-friendly interface to perform asset discovery,
+vulnerability scanning, and compliance checks on a given domain. It leverages
+the 'click' library for building the command-line application.
+"""
 import click
 import os
 import psutil
@@ -17,7 +24,11 @@ database.init_db()
 
 @click.group()
 def cli():
-    """Aegis-Lite: Ethical Attack Surface Scanner for SMEs."""
+    """Aegis-Lite: Ethical Attack Surface Scanner for SMEs.
+
+    This is the main command group for the Aegis-Lite application.
+    It provides various subcommands to perform different tasks.
+    """
     pass
 
 @cli.command()
@@ -40,6 +51,16 @@ def cli():
 def scan(domain, ethical, compliance_check, monitor):
     """
     Performs asset discovery (subdomains and open ports) for a given domain.
+
+    This command initiates a full scan, including subdomain enumeration and
+    port scanning on discovered subdomains. It supports optional flags for
+    ethical scanning, compliance logging, and resource monitoring.
+
+    Args:
+        domain (str): The primary domain to scan.
+        ethical (bool): A flag to enable ethical scanning mode.
+        compliance_check (bool): A flag to enable compliance logging.
+        monitor (bool): A flag to log system resource usage.
     """
     click.echo(f"Starting scan for {domain}...")
 
