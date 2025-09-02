@@ -274,11 +274,14 @@ def export(format):
     elif format == "csv":
         with open(filename, "w", newline="") as f:
             # Get column names from the first asset's keys
-            fieldnames = assets[0].keys() if assets else []
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(assets)
-        click.echo(f"Successfully exported {len(assets)} assets to {filename} (CSV format).")
+	    if assets:
+	    	fieldnames = list(assets[0].keys())
+            	writer = csv.DictWriter(f, fieldnames=fieldnames)
+            	writer.writeheader()
+            	writer.writerows(assets)
+        	click.echo(f"Successfully exported {len(assets)} assets to {filename} (CSV).")
+	    else:
+		click.echo("No assets to export.")
 
 # New clear command
 @cli.command()

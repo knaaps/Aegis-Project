@@ -94,7 +94,7 @@ def run_nmap(target: str, ports: str = '80,443', rate_limit: int = None) -> str:
     Returns:
         str: A comma-separated string of open ports.
     """
-    command = ['nmap', '-p', ports, '-sS', '--open', '-T4', target, '-oG', '-']
+    command = ['sudo', 'nmap', '-p', ports, '-sS', '--open', '-T4', target, '-oG', '-']
     if rate_limit:
         command.append(f"--max-rate={rate_limit}")
 
