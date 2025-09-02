@@ -1,3 +1,4 @@
+import socket
 import time
 import random
 import subprocess
@@ -12,7 +13,7 @@ class MockScanner:
     actual network requests. In a production environment, these methods
     would be replaced by functions that execute actual CLI tools.
     """
-    # Your existing mock methods remain here for testing
+    # existing mock methods remain here for testing
     def enumerate_subdomains(self, domain: str) -> list[str]:
         """
         Mocks subdomain enumeration for a given domain.
@@ -125,6 +126,57 @@ def run_nmap(target: str, ports: str = '80,443', rate_limit: int = None) -> str:
         print("Nmap not found. Please ensure it's installed and in your PATH.")
         return ""
 
+def resolve_ip(target: str) -> str:
+    """
+    Performs a DNS lookup to get the IP address for a given target.
+
+    Args:
+        target (str): The domain or subdomain to resolve.
+
+    Returns:
+        str: The IP address of the target, or "Unknown" if resolution fails.
+    """
+    try:
+        ip_address = socket.gethostbyname(target)
+        return ip_address
+    except socket.gaierror:
+        return "Unknown"
+
+def calculate_score(ports: str) -> int:
+    """
+    Calculates a risk score based on open ports.
+
+    Args:
+        ports (str): A comma-separated string of open ports.
+
+    Returns:
+        int: The calculated risk score.
+    """
+    score = 0
+    if not ports:
+        return score
+
+    # Define high-risk ports with specific point values
+    high_risk_ports = {
+        '22': 50,    # SSH - often a target for brute force attacks
+        '23': 40,    # Telnet - unencrypted, highly vulnerable
+        '80': 10,    # HTTP - common attack vector
+        '443': 10,   # HTTPS - common attack vector
+        '3306': 30,  # MySQL - database access
+        '5432': 30,  # PostgreSQL - database access
+        '27017': 30, # MongoDB - database access
+        '5900': 20,  # VNC - remote desktop access
+    }
+
+    # Split the string of ports into a list
+    open_ports = ports.split(',')
+    
+    # Calculate score based on the number and type of open ports
+    for port in open_ports:
+        port = port.strip()
+        score += high_risk_ports.get(port, 5) # Default to 5 points for any other open port
+
+    return score
 
 # Instantiate the mock scanner for use in cli.py
 mock_scanner = MockScanner()

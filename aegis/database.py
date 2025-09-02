@@ -91,7 +91,7 @@ def get_all_assets():
     """
     conn = connect_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, domain, ip, ports, score FROM assets")
+    cursor.execute("SELECT id, domain, ip, ports, score, last_scanned FROM assets")
     assets = cursor.fetchall()
     conn.close()
     return assets
