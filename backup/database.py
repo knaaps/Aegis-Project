@@ -4,7 +4,6 @@ Enhanced Database Module for Aegis-Lite
 
 Fixed version with proper error handling, connection management,
 and consistent data retrieval including vulnerability data.
-Updated with corrected risk categorization logic.
 """
 
 import sqlite3
@@ -247,12 +246,12 @@ def clear_db() -> bool:
         return False
 
 def get_db_stats() -> Dict[str, Any]:
-    """Get comprehensive database statistics with CORRECTED risk categories"""
+    """Get comprehensive database statistics"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
 
-            # Get basic stats with FIXED risk categorization
+            # Get basic stats
             cursor.execute("""
                 SELECT
                     COUNT(*) as total_assets,
@@ -260,10 +259,9 @@ def get_db_stats() -> Dict[str, Any]:
                     COALESCE(MAX(score), 0) as max_score,
                     COALESCE(MIN(score), 0) as min_score,
                     COUNT(CASE WHEN ports != '' AND ports IS NOT NULL THEN 1 END) as assets_with_ports,
-                    COUNT(CASE WHEN score >= 70 THEN 1 END) as critical_risk_assets,
-                    COUNT(CASE WHEN score >= 50 AND score < 70 THEN 1 END) as high_risk_assets,
-                    COUNT(CASE WHEN score >= 30 AND score < 50 THEN 1 END) as medium_risk_assets,
-                    COUNT(CASE WHEN score > 0 AND score < 30 THEN 1 END) as low_risk_assets
+                    COUNT(CASE WHEN score > 50 THEN 1 END) as high_risk_assets,
+                    COUNT(CASE WHEN score BETWEEN 20 AND 50 THEN 1 END) as medium_risk_assets,
+                    COUNT(CASE WHEN score < 20 THEN 1 END) as low_risk_assets
                 FROM assets
             """)
 
@@ -275,7 +273,6 @@ def get_db_stats() -> Dict[str, Any]:
                     'max_score': row['max_score'],
                     'min_score': row['min_score'],
                     'assets_with_ports': row['assets_with_ports'],
-                    'critical_risk_assets': row['critical_risk_assets'],
                     'high_risk_assets': row['high_risk_assets'],
                     'medium_risk_assets': row['medium_risk_assets'],
                     'low_risk_assets': row['low_risk_assets']
@@ -295,7 +292,6 @@ def _empty_stats() -> Dict[str, Any]:
         'max_score': 0,
         'min_score': 0,
         'assets_with_ports': 0,
-        'critical_risk_assets': 0,
         'high_risk_assets': 0,
         'medium_risk_assets': 0,
         'low_risk_assets': 0
@@ -350,16 +346,8 @@ def get_recent_assets(limit: int = 10) -> List[Dict[str, Any]]:
         logger.error(f"Failed to get recent assets: {e}")
         return []
 
-def get_critical_assets() -> List[Dict[str, Any]]:
-    """Get assets with critical risk scores (70+)"""
-    return get_assets_by_score_range(70, 100)
-
-def get_high_risk_assets() -> List[Dict[str, Any]]:
-    """Get assets with high risk scores (50-69)"""
-    return get_assets_by_score_range(50, 69)
-
 def test_database():
-    """Test database functionality with corrected risk logic"""
+    """Test database functionality"""
     print("Testing database functionality...")
 
     try:
@@ -367,58 +355,46 @@ def test_database():
         init_db()
         print("✓ Database initialization passed")
 
-        # Test inserting assets with different risk levels
-        test_assets = [
-            ("low-risk.example.com", "192.168.1.1", "443", 25),  # Low risk
-            ("medium-risk.example.com", "192.168.1.2", "80,443", 40),  # Medium risk
-            ("high-risk.example.com", "192.168.1.3", "22,80,443", 60),  # High risk
-            ("critical-risk.example.com", "192.168.1.4", "22,23,80,135,445,3389", 85),  # Critical
-        ]
-
-        for domain, ip, ports, score in test_assets:
-            success = insert_asset(domain, ip, ports, score)
-            if success:
-                print(f"✓ Inserted {domain} with risk score {score}")
-            else:
-                print(f"✗ Failed to insert {domain}")
-                return
+        # Test inserting an asset with all data
+        success = insert_asset(
+            "test.example.com",
+            "192.168.1.1",
+            "80,443",
+            25,
+            '{"has_ssl": true, "valid_cert": true}',
+            '{"has_admin_panel": false}'
+        )
+        if success:
+            print("✓ Insert test passed")
+        else:
+            print("✗ Insert test failed")
+            return
 
         # Test retrieving assets
         assets = get_all_assets()
-        if assets and len(assets) >= 4:
+        if assets and len(assets) > 0:
             print(f"✓ Retrieve test passed - found {len(assets)} assets")
+
+            # Check if vulnerability data is included
+            asset = assets[0]
+            if 'ssl_vulnerabilities' in asset and 'web_vulnerabilities' in asset:
+                print("✓ Vulnerability data retrieval passed")
+            else:
+                print("✗ Vulnerability data missing")
         else:
             print("✗ Retrieve test failed")
             return
 
-        # Test statistics with corrected risk categories
+        # Test statistics
         stats = get_db_stats()
-        print(f"✓ Stats test passed:")
-        print(f"  Critical risk (70+): {stats['critical_risk_assets']}")
-        print(f"  High risk (50-69): {stats['high_risk_assets']}")
-        print(f"  Medium risk (30-49): {stats['medium_risk_assets']}")
-        print(f"  Low risk (1-29): {stats['low_risk_assets']}")
+        print(f"✓ Stats test passed: {stats}")
 
-        # Verify the risk categorization is correct
-        expected_critical = 1  # critical-risk.example.com (85)
-        expected_high = 1      # high-risk.example.com (60)
-        expected_medium = 1    # medium-risk.example.com (40)
-        expected_low = 1       # low-risk.example.com (25)
-
-        if (stats['critical_risk_assets'] == expected_critical and
-            stats['high_risk_assets'] == expected_high and
-            stats['medium_risk_assets'] == expected_medium and
-            stats['low_risk_assets'] == expected_low):
-            print("✓ Risk categorization logic is correct!")
+        # Test specific domain retrieval
+        asset = get_asset_by_domain("test.example.com")
+        if asset:
+            print(f"✓ Domain-specific retrieval passed")
         else:
-            print("✗ Risk categorization logic needs fixing")
-
-        # Test critical assets function
-        critical_assets = get_critical_assets()
-        if len(critical_assets) == 1:
-            print("✓ Critical assets filter working correctly")
-        else:
-            print("✗ Critical assets filter failed")
+            print("✗ Domain-specific retrieval failed")
 
         print("All database tests passed!")
 

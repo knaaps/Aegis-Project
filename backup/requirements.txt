@@ -1,0 +1,13 @@
+click==8.1.7
+psutil==6.0.0
+requests==2.31.0
+sqlite3  # Built-in
+subprocess  # Built-in
+json  # Built-in
+logging  # Built-in
+re  # Built-in
+ssl  # Built-in
+socket  # Built-in
+time  # Built-in
+threading  # Built-in
+uuid  # Built-in

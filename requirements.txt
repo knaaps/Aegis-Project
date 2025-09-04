@@ -1,13 +1,32 @@
+# Aegis-Lite Requirements - Simplified Version
+# Essential dependencies for student project
+
+# Core CLI framework
 click==8.1.7
-psutil==6.0.0
+
+# Web UI framework
+streamlit==1.28.0
+pandas==2.1.0
+
+# HTTP requests for simple SSL checking
 requests==2.31.0
-sqlite3  # Built-in
-subprocess  # Built-in
-json  # Built-in
-logging  # Built-in
-re  # Built-in
-ssl  # Built-in
-socket  # Built-in
-time  # Built-in
-threading  # Built-in
-uuid  # Built-in
+
+# System monitoring (optional but useful)
+psutil==5.9.5
+
+# Testing framework
+pytest==7.4.0
+pytest-cov==4.1.0
+
+# Built-in Python modules :
+# - sqlite3 (database)
+# - json (data handling)
+# - csv (export functionality)
+# - time (timing and delays)
+# - subprocess (external tool execution)
+# - socket (DNS resolution)
+# - ssl (basic SSL checking)
+# - re (regex validation)
+# - uuid (scan ID generation)
+# - logging (basic logging)
+# - threading (if needed for future enhancements)
