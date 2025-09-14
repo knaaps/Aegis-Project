@@ -1,7 +1,8 @@
 """
-Simplified Streamlit UI for Aegis-Lite
-======================================
-Reduced complexity while maintaining functionality
+Streamlit UI for Aegis-Lite - Fixed Version
+=======================================================
+
+UI with corrected risk level logic and enhanced display
 """
 
 import streamlit as st
@@ -10,7 +11,6 @@ import pandas as pd
 import time
 from aegis.database import get_all_assets, get_db_stats, init_db, clear_db
 from aegis.cli import run_scan_logic
-from aegis.utils import get_risk_level, safe_json_parse
 
 # Page configuration
 st.set_page_config(
@@ -31,23 +31,48 @@ def show_system_info():
         st.sidebar.metric("CPU Usage", f"{cpu:.1f}%")
         st.sidebar.metric("RAM Usage", f"{memory.percent:.1f}%")
 
+        # Warning for high usage
         if cpu > 80 or memory.percent > 80:
             st.sidebar.warning("⚠️ High system usage!")
 
     except ImportError:
         st.sidebar.info("System monitoring not available")
 
+def get_risk_level(score):
+    """Convert risk score to risk level (FIXED LOGIC)"""
+    if score >= 70:
+        return "🔴 Critical"
+    elif score >= 50:
+        return "🟠 High"
+    elif score >= 30:
+        return "🟡 Medium"
+    elif score > 0:
+        return "🟢 Low"
+    else:
+        return "⚪ None"
+
 def format_scan_results(assets):
-    """Format scan results for display"""
+    """Format scan results for display with corrected risk logic"""
     if not assets:
         return pd.DataFrame()
 
+    # Convert to DataFrame and clean up
     df_data = []
     for asset in assets:
         try:
             # Parse JSON fields safely
-            https_data = safe_json_parse(asset.get('ssl_vulnerabilities', '{}'))
-            web_data = safe_json_parse(asset.get('web_vulnerabilities', '{}'))
+            https_data = {}
+            web_data = {}
+
+            try:
+                https_data = json.loads(asset.get('ssl_vulnerabilities', '{}'))
+            except:
+                pass
+
+            try:
+                web_data = json.loads(asset.get('web_vulnerabilities', '{}'))
+            except:
+                pass
 
             # Check for certificate expiry warning
             cert_warning = ""
@@ -97,7 +122,7 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.subheader("📋 Risk Level Guide")
     st.sidebar.markdown("""
-    **Risk Scoring:**
+    **Risk Scoring (Fixed):**
     - 🔴 **Critical (70-100)**: Immediate attention required
     - 🟠 **High (50-69)**: Address promptly
     - 🟡 **Medium (30-49)**: Monitor and plan fixes
@@ -106,11 +131,20 @@ def main():
     """)
 
     st.sidebar.markdown("---")
+    st.sidebar.subheader("📋 Quick Help")
+    st.sidebar.info("""
+    **How to use:**
+    1. Enter a domain name
+    2. Choose scan options
+    3. Click 'Start Scan'
+    4. View results in other tabs
+    """)
+
+    # Add database clear option in sidebar
     if st.sidebar.button("🗑️ Clear All Data"):
         try:
             clear_db()
-            st.sidebar.success("Database cleared!")
-            st.experimental_rerun()
+            st.sidebar.success("Database cleared successfully!")
         except Exception as e:
             st.sidebar.error(f"Failed to clear database: {e}")
 
@@ -122,24 +156,32 @@ def main():
         st.header("Domain Scanning")
 
         # Input section
-        col1, col2 = st.columns([2, 1])
+        col1, col2, col3 = st.columns([3, 1, 1])
 
         with col1:
             domain = st.text_input(
                 "🌐 Target Domain",
                 placeholder="example.com",
-                help="Enter the domain you want to scan"
+                help="Enter the domain you want to scan (without http://)"
             )
 
         with col2:
             st.markdown("**Options:**")
-            ethical = st.checkbox("🤝 Ethical Mode", value=True)
-            monitor = st.checkbox("📊 Monitor Resources")
+            ethical = st.checkbox("🤝 Ethical Mode", value=True,
+                                help="Respectful scanning with delays")
+            monitor = st.checkbox("📊 Monitor Resources",
+                                help="Show system usage during scan")
+
+        with col3:
             max_subdomains = st.number_input(
-                "Max Subdomains", min_value=1, max_value=500, value=50
+                "Max Subdomains",
+                min_value=1,
+                max_value=500,
+                value=50,
+                help="Limit number of subdomains to scan"
             )
 
-        # Scan button
+        # Scan button and status
         if st.button("🚀 Start Scan", type="primary", disabled=not domain):
             if not domain:
                 st.error("Please enter a domain name")
@@ -149,9 +191,11 @@ def main():
                 status_text = st.empty()
 
                 try:
+                    # Start scan
                     status_text.text("Initializing scan...")
                     progress_bar.progress(10)
 
+                    # Run the scan
                     status_text.text(f"Scanning {domain}...")
                     progress_bar.progress(30)
 
@@ -162,7 +206,7 @@ def main():
 
                     # Show results
                     if result.get("success"):
-                        st.success("✅ Scan completed successfully!")
+                        st.success(f"✅ Scan completed successfully!")
                         st.balloons()
 
                         # Show summary
@@ -182,12 +226,13 @@ def main():
                 finally:
                     status_text.empty()
 
-        # Information
+        # Information box
         st.info("""
         **ℹ️ About Ethical Scanning:**
-        - Respects rate limits and scanning best practices
+        - Respects robots.txt and rate limits
         - Uses 2-second delays between requests
-        - Focuses on common ports only in ethical mode
+        - Focuses on common ports only
+        - Suitable for authorized security assessments
         """)
 
     # Tab 2: Results
@@ -195,14 +240,15 @@ def main():
         st.header("📊 Scan Results")
 
         try:
+            # Get data from database
             assets = get_all_assets()
 
             if assets:
-                # Summary metrics
+                # Show summary metrics
                 st.subheader("📈 Summary")
-                df = format_scan_results(assets)
-
                 col1, col2, col3, col4 = st.columns(4)
+
+                df = format_scan_results(assets)
 
                 with col1:
                     st.metric("Total Assets", len(assets))
@@ -210,6 +256,7 @@ def main():
                     avg_score = df['Risk Score'].mean() if not df.empty else 0
                     st.metric("Average Risk Score", f"{avg_score:.1f}")
                 with col3:
+                    # FIXED: High risk is now score >= 50 (not > 50)
                     high_risk = len(df[df['Risk Score'] >= 50]) if not df.empty else 0
                     st.metric("High+ Risk Assets", high_risk)
                 with col4:
@@ -218,47 +265,54 @@ def main():
 
                 st.markdown("---")
 
-                # Assets table
+                # Show assets table
                 st.subheader("🎯 Discovered Assets")
                 if not df.empty:
-                    # Color code risk scores
+                    # Color code risk scores (FIXED LOGIC)
                     def color_risk_score(val):
                         if val >= 70:
-                            return 'color: red; font-weight: bold'
+                            return 'color: red; font-weight: bold'  # Critical
                         elif val >= 50:
-                            return 'color: orange; font-weight: bold'
+                            return 'color: orange; font-weight: bold'  # High
                         elif val >= 30:
-                            return 'color: goldenrod'
+                            return 'color: goldenrod'  # Medium
                         elif val > 0:
-                            return 'color: green'
+                            return 'color: green'  # Low
                         else:
-                            return 'color: gray'
+                            return 'color: gray'  # None
 
                     styled_df = df.style.applymap(color_risk_score, subset=['Risk Score'])
                     st.dataframe(styled_df, use_container_width=True)
 
-                    # Vulnerability details
+                    # Show vulnerability details if any exist
                     vuln_assets = []
                     for asset in assets:
-                        web_data = safe_json_parse(asset.get('web_vulnerabilities', '{}'))
-                        vulns = web_data.get('vulnerabilities', [])
-                        if vulns:
-                            for vuln in vulns:
-                                vuln_assets.append({
-                                    'Domain': asset['domain'],
-                                    'Vulnerability': vuln.get('name', 'Unknown'),
-                                    'Severity': vuln.get('severity', 'info').title(),
-                                    'Template': vuln.get('template', 'unknown')
-                                })
+                        try:
+                            web_data = json.loads(asset.get('web_vulnerabilities', '{}'))
+                            vulns = web_data.get('vulnerabilities', [])
+                            if vulns:
+                                for vuln in vulns:
+                                    vuln_assets.append({
+                                        'Domain': asset['domain'],
+                                        'Vulnerability': vuln.get('name', 'Unknown'),
+                                        'Severity': vuln.get('severity', 'info').title(),
+                                        'Template': vuln.get('template', 'unknown')
+                                    })
+                        except:
+                            continue
 
                     if vuln_assets:
                         st.subheader("🚨 Vulnerabilities Found")
                         vuln_df = pd.DataFrame(vuln_assets)
                         st.dataframe(vuln_df, use_container_width=True)
 
+                        # Alert for critical vulnerabilities
                         critical_count = len([v for v in vuln_assets if v['Severity'] in ['Critical', 'High']])
                         if critical_count > 0:
-                            st.error(f"⚠️ Found {critical_count} critical/high severity vulnerabilities!")
+                            st.error(f"⚠️ Found {critical_count} critical/high severity vulnerabilities that need immediate attention!")
+
+                else:
+                    st.info("No assets to display")
 
             else:
                 st.info("🔭 No scan results found. Run a scan first!")
@@ -280,26 +334,27 @@ def main():
 
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.write(f"**Total Assets:** {stats['total_assets']}")
+                    st.write(f"**Total Assets Analyzed:** {stats['total_assets']}")
                     st.write(f"**Average Risk Score:** {stats['avg_score']:.1f}/100")
                     st.write(f"**Scan Date:** {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
                 with col2:
-                    st.write(f"**Critical Risk:** {stats['critical_risk_assets']} assets")
-                    st.write(f"**High Risk:** {stats['high_risk_assets']} assets")
-                    st.write(f"**Medium Risk:** {stats['medium_risk_assets']} assets")
-                    st.write(f"**Low Risk:** {stats['low_risk_assets']} assets")
+                    # FIXED: Risk categories now use correct thresholds
+                    critical_assets = len([a for a in assets if a.get('score', 0) >= 70])
+                    high_assets = len([a for a in assets if 50 <= a.get('score', 0) < 70])
+                    medium_assets = len([a for a in assets if 30 <= a.get('score', 0) < 50])
+                    low_assets = len([a for a in assets if 0 < a.get('score', 0) < 30])
+
+                    st.write(f"**Critical Risk Assets:** {critical_assets}")
+                    st.write(f"**High Risk Assets:** {high_assets}")
+                    st.write(f"**Medium Risk Assets:** {medium_assets}")
+                    st.write(f"**Low Risk Assets:** {low_assets}")
 
                 # Risk Distribution Chart
                 st.subheader("📈 Risk Distribution")
                 risk_data = {
                     'Risk Level': ['Critical (70+)', 'High (50-69)', 'Medium (30-49)', 'Low (1-29)'],
-                    'Count': [
-                        stats['critical_risk_assets'],
-                        stats['high_risk_assets'],
-                        stats['medium_risk_assets'],
-                        stats['low_risk_assets']
-                    ]
+                    'Count': [critical_assets, high_assets, medium_assets, low_assets]
                 }
                 risk_df = pd.DataFrame(risk_data)
                 st.bar_chart(risk_df.set_index('Risk Level'))
@@ -312,22 +367,25 @@ def main():
                 expiring_certs = 0
 
                 for asset in assets:
-                    https_data = safe_json_parse(asset.get('ssl_vulnerabilities', '{}'))
-                    web_data = safe_json_parse(asset.get('web_vulnerabilities', '{}'))
+                    try:
+                        https_data = json.loads(asset.get('ssl_vulnerabilities', '{}'))
+                        web_data = json.loads(asset.get('web_vulnerabilities', '{}'))
 
-                    if https_data.get('has_https'):
-                        https_count += 1
+                        if https_data.get('has_https'):
+                            https_count += 1
 
-                    if https_data.get('cert_expires_soon'):
-                        expiring_certs += 1
+                        if https_data.get('cert_expires_soon'):
+                            expiring_certs += 1
 
-                    total_vulns += len(web_data.get('vulnerabilities', []))
+                        total_vulns += len(web_data.get('vulnerabilities', []))
+                    except:
+                        continue
 
                 findings = []
-                if stats['critical_risk_assets'] > 0:
-                    findings.append(f"🔴 {stats['critical_risk_assets']} critical-risk assets require immediate attention")
-                if stats['high_risk_assets'] > 0:
-                    findings.append(f"🟠 {stats['high_risk_assets']} high-risk assets need prompt remediation")
+                if critical_assets > 0:
+                    findings.append(f"🔴 {critical_assets} critical-risk assets require immediate attention")
+                if high_assets > 0:
+                    findings.append(f"🟠 {high_assets} high-risk assets need prompt remediation")
                 if https_count < len(assets):
                     findings.append(f"🟡 {len(assets) - https_count} assets lack HTTPS encryption")
                 if expiring_certs > 0:
@@ -350,10 +408,10 @@ def main():
                     report_data = {
                         'summary': {
                             'total_assets': len(assets),
-                            'critical_risk': stats['critical_risk_assets'],
-                            'high_risk': stats['high_risk_assets'],
-                            'medium_risk': stats['medium_risk_assets'],
-                            'low_risk': stats['low_risk_assets'],
+                            'critical_risk': critical_assets,
+                            'high_risk': high_assets,
+                            'medium_risk': medium_assets,
+                            'low_risk': low_assets,
                             'avg_score': stats['avg_score']
                         },
                         'assets': [dict(asset) for asset in assets],
@@ -382,16 +440,16 @@ def main():
                 st.subheader("💡 Recommendations")
 
                 recommendations = []
-                if stats['critical_risk_assets'] > 0:
+                if critical_assets > 0:
                     recommendations.append("🔴 **URGENT**: Address critical-risk assets immediately")
-                if stats['high_risk_assets'] > 0:
+                if high_assets > 0:
                     recommendations.append("🟠 **HIGH PRIORITY**: Remediate high-risk vulnerabilities")
                 if https_count < len(assets):
                     recommendations.append("🔒 Enable HTTPS for all web services")
                 if expiring_certs > 0:
                     recommendations.append("🔄 Renew SSL certificates before expiry")
 
-                # Standard recommendations
+                # Default recommendations
                 recommendations.extend([
                     "📅 Conduct regular security assessments",
                     "🛡️ Implement security monitoring",
@@ -412,7 +470,7 @@ def main():
     st.markdown("---")
     st.markdown(
         "<div style='text-align: center; color: gray;'>"
-        "🛡️ Aegis-Lite - Ethical Security Scanner for SMEs<br>"
+        "🛡️ Aegis-Lite v2.5 - Ethical Security Scanner for SMEs<br>"
         "Built for educational purposes - Use responsibly"
         "</div>",
         unsafe_allow_html=True

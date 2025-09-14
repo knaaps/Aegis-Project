@@ -1,7 +1,8 @@
 """
-Simplified CLI Module for Aegis-Lite
-====================================
-Reduced complexity and redundancy while maintaining functionality
+CLI Module for Aegis-Lite
+======================================================
+
+Main cli interface of project functionalities.
 """
 
 import click
@@ -9,28 +10,44 @@ import time
 import json
 import csv
 import subprocess
-from typing import Dict, Any
+from typing import Dict, Any, List
 import uuid
 
+# Import the simplified modules
 from aegis import database
-from aegis.utils import validate_domain, clean_input
 from aegis.scanners import (
     run_subfinder, run_nmap, resolve_ip, calculate_score,
     check_https, check_web_vulnerabilities, show_system_resources,
     simple_rate_limit
 )
 
+def validate_scan_inputs(domain: str) -> tuple[bool, str]:
+    """Simple input validation"""
+    if not domain:
+        return False, "Domain cannot be empty"
+
+    if len(domain) > 253:
+        return False, "Domain too long"
+
+    # Basic format check
+    if not domain.replace('.', '').replace('-', '').isalnum():
+        return False, "Domain contains invalid characters"
+
+    return True, "Valid"
+
 def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: int = None) -> Dict[str, Any]:
-    """Main scan logic - processes one domain at a time"""
+    """
+    Main scan logic - simplified version
+    Processes one domain at a time
+    """
     scan_id = str(uuid.uuid4())[:8]
     print(f"\n{'='*50}")
     print(f"Starting scan {scan_id} for {domain}")
     print(f"{'='*50}")
 
-    # Validate and clean input
-    domain = clean_input(domain)
-    if not validate_domain(domain):
-        error_msg = f"Invalid domain format: {domain}"
+    # Validate input
+    is_valid, error_msg = validate_scan_inputs(domain)
+    if not is_valid:
         print(f"Error: {error_msg}")
         return {"success": False, "error": error_msg}
 
@@ -45,12 +62,13 @@ def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: in
     }
 
     try:
+        # Show system resources if monitoring is enabled
         if monitor:
             print("\nSystem Resources:")
             show_system_resources()
 
         # Phase 1: Find subdomains
-        print(f"\n[1/4] Finding subdomains for {domain}...")
+        print(f"\nPhase 1: Finding subdomains for {domain}...")
         if ethical:
             print("(Using ethical mode - slower but respectful)")
 
@@ -61,55 +79,58 @@ def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: in
 
         scan_stats["subdomains_found"] = len(subdomains)
 
-        # Include input domain in scan list
-        domains_to_scan = [domain] + subdomains
-        print(f"[2/4] Found {len(subdomains)} subdomains. Total {len(domains_to_scan)} domains to scan")
+        # Always include the input domain itself
+        domains_to_scan = [domain]
+        domains_to_scan.extend(subdomains)
 
         if not domains_to_scan:
             print("No domains to scan.")
             return finalize_scan(scan_stats, True)
 
-        # Phase 2: Scan each domain
-        print(f"\n[3/4] Scanning each domain...")
+        print(f"Found {len(subdomains)} subdomains. Total {len(domains_to_scan)} domains to scan")
+
+        # Phase 2: Process each domain
+        print(f"\nPhase 2: Scanning each domain...")
 
         for i, current_domain in enumerate(domains_to_scan, 1):
             print(f"\nScanning {i}/{len(domains_to_scan)}: {current_domain}")
 
             try:
+                # Ethical rate limiting
                 if ethical and i > 1:
                     print("  Waiting 2 seconds (ethical mode)...")
                     simple_rate_limit()
 
-                # Resolve IP
-                print("  → Resolving IP...")
+                # Step 1: Resolve IP
+                print("  Resolving IP address...")
                 ip = resolve_ip(current_domain, timeout=10)
                 if ip == "Unknown":
-                    print("  ✗ Could not resolve IP")
+                    print("  Could not resolve IP address")
                     scan_stats["failed_scans"] += 1
                     continue
 
-                print(f"  → IP: {ip}")
+                print(f"  IP: {ip}")
 
-                # Scan ports
-                print("  → Scanning ports...")
+                # Step 2: Scan ports
+                print("  Scanning ports...")
                 ports = run_nmap(ip, current_domain, ethical)
 
-                # Check HTTPS
-                print("  → Checking HTTPS...")
+                # Step 3: Check HTTPS
+                print("  Checking HTTPS...")
                 https_result = check_https(current_domain)
 
-                # Check web vulnerabilities if HTTP/HTTPS is available
+                # Step 4: Basic web vulnerability check
                 web_result = {"vulnerabilities": [], "has_admin_panel": False}
                 if ports and ('80' in ports or '443' in ports):
-                    print("  → Checking vulnerabilities...")
+                    print("  Checking for basic vulnerabilities...")
                     protocol = "https" if '443' in ports else "http"
                     web_result = check_web_vulnerabilities(f"{protocol}://{current_domain}")
 
-                # Calculate risk score
+                # Step 5: Calculate trust score
                 score = calculate_score(ports)
 
-                # Save to database
-                success = database.save_asset(
+                # Step 6: Save to database
+                success = database.insert_asset(
                     current_domain,
                     ip=ip,
                     ports=ports,
@@ -130,7 +151,6 @@ def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: in
                 print(f"  ✗ Error scanning {current_domain}: {e}")
                 continue
 
-        print(f"\n[4/4] Scan completed!")
         return finalize_scan(scan_stats, True)
 
     except KeyboardInterrupt:
@@ -166,7 +186,7 @@ def finalize_scan(scan_stats: Dict[str, Any], success: bool) -> Dict[str, Any]:
     print(f"{'='*50}")
     return scan_stats
 
-# Initialize database
+# Initialize database when CLI starts
 try:
     database.init_db()
     print("Database initialized successfully")
@@ -176,23 +196,26 @@ except Exception as e:
 
 @click.group()
 def cli():
-    """Aegis-Lite: Ethical Security Scanner for SMEs"""
+    """Aegis-Lite: Ethical Security Scanner for Small-Medium Enterprises"""
     pass
 
 @cli.command()
 @click.argument("domain")
 @click.option("--ethical", is_flag=True, default=True, help="Use ethical scanning mode")
 @click.option("--monitor", is_flag=True, help="Show system resource usage")
-@click.option("--max-subdomains", type=int, help="Limit number of subdomains to scan")
+@click.option("--max-subdomains", type=int, default=None, help="Limit number of subdomains to scan")
 def scan(domain, ethical, monitor, max_subdomains):
     """Scan a domain for subdomains and security issues"""
     result = run_scan_logic(domain, ethical, monitor, max_subdomains)
+
     if not result.get("success", False):
         exit(1)
 
 @cli.command()
-@click.option("--format", "output_format", type=click.Choice(["table", "json", "csv"]),
-              default="table", help="Output format")
+@click.option("--format", "output_format",
+              type=click.Choice(["table", "json", "csv"]),
+              default="table",
+              help="Output format")
 @click.option("--limit", type=int, help="Limit number of results")
 def view(output_format, limit):
     """View all scanned assets in the database"""
@@ -273,10 +296,9 @@ def report():
 
     # Risk breakdown
     print("RISK DISTRIBUTION:")
-    print(f"  Critical (70+):    {stats['critical_risk_assets']} assets")
-    print(f"  High (50-69):      {stats['high_risk_assets']} assets")
-    print(f"  Medium (30-49):    {stats['medium_risk_assets']} assets")
-    print(f"  Low (1-29):        {stats['low_risk_assets']} assets")
+    print(f"  High risk (>50):    {stats['high_risk_assets']} assets")
+    print(f"  Medium risk (20-50): {stats['medium_risk_assets']} assets")
+    print(f"  Low risk (≤20):      {stats['low_risk_assets']} assets")
     print()
 
     # Key findings
@@ -301,10 +323,10 @@ def report():
     print(f"  Assets with HTTPS: {https_count}/{len(assets)}")
     print(f"  Total vulnerabilities found: {vuln_count}")
 
-    if stats['critical_risk_assets'] > 0:
-        print(f"  WARNING: {stats['critical_risk_assets']} critical-risk assets need attention")
+    if stats['high_risk_assets'] > 0:
+        print(f"  WARNING: {stats['high_risk_assets']} high-risk assets need attention")
     else:
-        print("  No critical-risk assets found")
+        print("  ✓ No high-risk assets found")
 
     print("=" * 50)
 
@@ -324,9 +346,13 @@ def export(format, output):
         return
 
     # Generate filename if not provided
-    filename = output or f"aegis_export_{time.strftime('%Y%m%d_%H%M%S')}.{format}"
-    if not filename.endswith(f".{format}"):
-        filename += f".{format}"
+    if output:
+        filename = output
+        if not filename.endswith(f".{format}"):
+            filename += f".{format}"
+    else:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"aegis_export_{timestamp}.{format}"
 
     try:
         if format == "json":
@@ -359,6 +385,7 @@ def clear():
 def interactive():
     """Start interactive mode for easier use"""
     print("Welcome to Aegis-Lite Interactive Mode!")
+    print("This mode makes it easy to use all features.")
     print()
 
     while True:
@@ -378,6 +405,7 @@ def interactive():
                 if domain:
                     ethical = input("Use ethical mode? (Y/n): ").strip().lower() != 'n'
                     monitor = input("Monitor resources? (y/N): ").strip().lower() == 'y'
+
                     result = run_scan_logic(domain, ethical, monitor)
                     if not result.get("success", False):
                         print("Scan failed. Check output above.")
@@ -386,7 +414,12 @@ def interactive():
 
             elif choice == "2":
                 format_choice = input("Display format (table/json/csv) [table]: ").strip() or "table"
-                subprocess.run(["python", "-m", "aegis.cli", "view", "--format", format_choice])
+                if format_choice in ["table", "json", "csv"]:
+                    # Use subprocess to call view command
+                    subprocess.run(["python", "-m", "aegis.cli", "view", "--format", format_choice])
+                else:
+                    print("Invalid format. Using table.")
+                    subprocess.run(["python", "-m", "aegis.cli", "view"])
 
             elif choice == "3":
                 subprocess.run(["python", "-m", "aegis.cli", "report"])
@@ -394,10 +427,11 @@ def interactive():
             elif choice == "4":
                 format_choice = input("Export format (json/csv) [json]: ").strip() or "json"
                 filename = input("Filename (optional): ").strip()
-                cmd = ["python", "-m", "aegis.cli", "export", format_choice]
+
                 if filename:
-                    cmd.extend(["-o", filename])
-                subprocess.run(cmd)
+                    subprocess.run(["python", "-m", "aegis.cli", "export", format_choice, "-o", filename])
+                else:
+                    subprocess.run(["python", "-m", "aegis.cli", "export", format_choice])
 
             elif choice == "5":
                 confirm = input("Are you sure you want to clear all data? (yes/no): ").strip().lower()
