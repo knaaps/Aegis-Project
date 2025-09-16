@@ -1,7 +1,7 @@
 """
-Simplified CLI Module for Aegis-Lite
-====================================
-Reduced complexity and redundancy while maintaining functionality
+Enhanced CLI Module for Aegis-Lite with Thread Pool Support
+===========================================================
+Integrated concurrent scanning while maintaining simplicity
 """
 
 import click
@@ -15,16 +15,21 @@ import uuid
 from aegis import database
 from aegis.utils import validate_domain, clean_input
 from aegis.scanners import (
-    run_subfinder, run_nmap, resolve_ip, calculate_score,
-    check_https, check_web_vulnerabilities, show_system_resources,
-    simple_rate_limit
+    run_subfinder, scan_domains_concurrent, show_system_resources,
+    monitor_system_resources, get_optimal_thread_count
 )
 
-def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: int = None) -> Dict[str, Any]:
-    """Main scan logic - processes one domain at a time"""
+def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: int = None,
+                   max_workers: int = None, use_threading: bool = True) -> Dict[str, Any]:
+    """Enhanced scan logic with thread pool support"""
     scan_id = str(uuid.uuid4())[:8]
     print(f"\n{'='*50}")
     print(f"Starting scan {scan_id} for {domain}")
+    if use_threading:
+        workers = max_workers or get_optimal_thread_count()
+        if ethical:
+            workers = min(workers, 3)  # Conservative for ethical mode
+        print(f"Using {workers} worker threads for concurrent scanning")
     print(f"{'='*50}")
 
     # Validate and clean input
@@ -41,13 +46,23 @@ def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: in
         "start_time": time.time(),
         "subdomains_found": 0,
         "successful_scans": 0,
-        "failed_scans": 0
+        "failed_scans": 0,
+        "threading_enabled": use_threading,
+        "max_workers": max_workers or get_optimal_thread_count()
     }
 
     try:
+        # Initial system resource check
         if monitor:
-            print("\nSystem Resources:")
+            print("\n📊 Initial System Resources:")
             show_system_resources()
+            resource_status = monitor_system_resources()
+            if not resource_status.get("system_healthy", True):
+                print("⚠️  Warning: High system load detected!")
+                if click.confirm("Continue with scan?"):
+                    pass
+                else:
+                    return finalize_scan(scan_stats, False, "Scan cancelled due to high system load")
 
         # Phase 1: Find subdomains
         print(f"\n[1/4] Finding subdomains for {domain}...")
@@ -58,6 +73,7 @@ def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: in
 
         if max_subdomains and len(subdomains) > max_subdomains:
             subdomains = subdomains[:max_subdomains]
+            print(f"Limited to first {max_subdomains} subdomains")
 
         scan_stats["subdomains_found"] = len(subdomains)
 
@@ -69,101 +85,153 @@ def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: in
             print("No domains to scan.")
             return finalize_scan(scan_stats, True)
 
-        # Phase 2: Scan each domain
-        print(f"\n[3/4] Scanning each domain...")
+        # Phase 2: Concurrent domain scanning
+        print(f"\n[3/4] {'Concurrent' if use_threading else 'Sequential'} domain scanning...")
 
-        for i, current_domain in enumerate(domains_to_scan, 1):
-            print(f"\nScanning {i}/{len(domains_to_scan)}: {current_domain}")
+        if use_threading:
+            # Use thread pool for concurrent scanning
+            scan_results = scan_domains_concurrent(
+                domains_to_scan,
+                ethical=ethical,
+                max_workers=max_workers
+            )
 
-            try:
-                if ethical and i > 1:
-                    print("  Waiting 2 seconds (ethical mode)...")
-                    simple_rate_limit()
+            # Update statistics
+            scan_stats["successful_scans"] = len(scan_results)
+            scan_stats["failed_scans"] = len(domains_to_scan) - len(scan_results)
 
-                # Resolve IP
-                print("  → Resolving IP...")
-                ip = resolve_ip(current_domain, timeout=10)
-                if ip == "Unknown":
-                    print("  ✗ Could not resolve IP")
-                    scan_stats["failed_scans"] += 1
+            # Phase 3: Save results to database
+            print(f"\n[4/4] Saving {len(scan_results)} results to database...")
+            saved_count = 0
+
+            for result in scan_results:
+                try:
+                    success = database.save_asset(
+                        result["domain"],
+                        ip=result["ip"],
+                        ports=result["ports"],
+                        score=result["score"],
+                        ssl_vulnerabilities=result["ssl_vulnerabilities"],
+                        web_vulnerabilities=result["web_vulnerabilities"]
+                    )
+                    if success:
+                        saved_count += 1
+                except Exception as e:
+                    print(f"Error saving {result['domain']}: {e}")
                     continue
 
-                print(f"  → IP: {ip}")
+            print(f"Successfully saved {saved_count}/{len(scan_results)} assets to database")
 
-                # Scan ports
-                print("  → Scanning ports...")
-                ports = run_nmap(ip, current_domain, ethical)
+        else:
+            # Original sequential scanning logic
+            from aegis.scanners import resolve_ip, run_nmap, check_https, check_web_vulnerabilities, calculate_score, simple_rate_limit
 
-                # Check HTTPS
-                print("  → Checking HTTPS...")
-                https_result = check_https(current_domain)
+            for i, current_domain in enumerate(domains_to_scan, 1):
+                print(f"\nScanning {i}/{len(domains_to_scan)}: {current_domain}")
 
-                # Check web vulnerabilities if HTTP/HTTPS is available
-                web_result = {"vulnerabilities": [], "has_admin_panel": False}
-                if ports and ('80' in ports or '443' in ports):
-                    print("  → Checking vulnerabilities...")
-                    protocol = "https" if '443' in ports else "http"
-                    web_result = check_web_vulnerabilities(f"{protocol}://{current_domain}")
+                try:
+                    if ethical and i > 1:
+                        print("  Waiting 2 seconds (ethical mode)...")
+                        simple_rate_limit()
 
-                # Calculate risk score
-                score = calculate_score(ports)
+                    # Resolve IP
+                    print("  → Resolving IP...")
+                    ip = resolve_ip(current_domain, timeout=10)
+                    if ip == "Unknown":
+                        print("  ✗ Could not resolve IP")
+                        scan_stats["failed_scans"] += 1
+                        continue
 
-                # Save to database
-                success = database.save_asset(
-                    current_domain,
-                    ip=ip,
-                    ports=ports,
-                    score=score,
-                    ssl_vulnerabilities=json.dumps(https_result),
-                    web_vulnerabilities=json.dumps(web_result)
-                )
+                    print(f"  → IP: {ip}")
 
-                if success:
-                    scan_stats["successful_scans"] += 1
-                    print(f"  ✓ Completed: Score {score}, Ports: {ports or 'none'}")
-                else:
+                    # Scan ports
+                    print("  → Scanning ports...")
+                    ports = run_nmap(ip, current_domain, ethical)
+
+                    # Check HTTPS
+                    print("  → Checking HTTPS...")
+                    https_result = check_https(current_domain)
+
+                    # Check web vulnerabilities if HTTP/HTTPS is available
+                    web_result = {"vulnerabilities": [], "has_admin_panel": False}
+                    if ports and ('80' in ports or '443' in ports):
+                        print("  → Checking vulnerabilities...")
+                        protocol = "https" if '443' in ports else "http"
+                        web_result = check_web_vulnerabilities(f"{protocol}://{current_domain}")
+
+                    # Calculate risk score
+                    score = calculate_score(ports)
+
+                    # Save to database
+                    success = database.save_asset(
+                        current_domain,
+                        ip=ip,
+                        ports=ports,
+                        score=score,
+                        ssl_vulnerabilities=json.dumps(https_result),
+                        web_vulnerabilities=json.dumps(web_result)
+                    )
+
+                    if success:
+                        scan_stats["successful_scans"] += 1
+                        print(f"  ✓ Completed: Score {score}, Ports: {ports or 'none'}")
+                    else:
+                        scan_stats["failed_scans"] += 1
+                        print(f"  ✗ Failed to save results")
+
+                except Exception as e:
                     scan_stats["failed_scans"] += 1
-                    print(f"  ✗ Failed to save results")
+                    print(f"  ✗ Error scanning {current_domain}: {e}")
+                    continue
 
-            except Exception as e:
-                scan_stats["failed_scans"] += 1
-                print(f"  ✗ Error scanning {current_domain}: {e}")
-                continue
+        # Final resource monitoring
+        if monitor:
+            print("\n📊 Final System Resources:")
+            show_system_resources()
 
         print(f"\n[4/4] Scan completed!")
         return finalize_scan(scan_stats, True)
 
     except KeyboardInterrupt:
         print("\nScan interrupted by user")
-        return finalize_scan(scan_stats, False)
+        return finalize_scan(scan_stats, False, "User interrupted")
     except Exception as e:
         print(f"Unexpected error during scan: {e}")
-        return finalize_scan(scan_stats, False)
+        return finalize_scan(scan_stats, False, f"Error: {e}")
 
-def finalize_scan(scan_stats: Dict[str, Any], success: bool) -> Dict[str, Any]:
-    """Display scan summary and return results"""
+def finalize_scan(scan_stats: Dict[str, Any], success: bool, error_msg: str = None) -> Dict[str, Any]:
+    """Enhanced scan summary with threading information"""
     scan_stats["end_time"] = time.time()
     scan_stats["duration"] = scan_stats["end_time"] - scan_stats["start_time"]
     scan_stats["success"] = success
 
     # Display summary
-    print(f"\n{'='*50}")
+    print(f"\n{'='*60}")
     print(f"Scan {scan_stats['scan_id']} Summary")
-    print(f"{'='*50}")
+    print(f"{'='*60}")
     print(f"Domain: {scan_stats['domain']}")
     print(f"Duration: {scan_stats['duration']:.1f} seconds")
     print(f"Subdomains found: {scan_stats['subdomains_found']}")
     print(f"Successful scans: {scan_stats['successful_scans']}")
     print(f"Failed scans: {scan_stats['failed_scans']}")
 
-    if success and scan_stats["successful_scans"] > 0:
-        print("✓ Scan completed successfully!")
-    elif success:
-        print("✓ Scan completed (no reachable assets found)")
+    if scan_stats.get("threading_enabled"):
+        print(f"Threading: Enabled ({scan_stats.get('max_workers', 'auto')} workers)")
     else:
-        print("✗ Scan completed with errors")
+        print("Threading: Disabled (sequential mode)")
 
-    print(f"{'='*50}")
+    if error_msg:
+        print(f"Error: {error_msg}")
+    elif success and scan_stats["successful_scans"] > 0:
+        print("✅ Scan completed successfully!")
+        efficiency = scan_stats["successful_scans"] / scan_stats["duration"] * 60
+        print(f"Performance: {efficiency:.1f} domains/minute")
+    elif success:
+        print("✅ Scan completed (no reachable assets found)")
+    else:
+        print("❌ Scan completed with errors")
+
+    print(f"{'='*60}")
     return scan_stats
 
 # Initialize database
@@ -184,9 +252,34 @@ def cli():
 @click.option("--ethical", is_flag=True, default=True, help="Use ethical scanning mode")
 @click.option("--monitor", is_flag=True, help="Show system resource usage")
 @click.option("--max-subdomains", type=int, help="Limit number of subdomains to scan")
-def scan(domain, ethical, monitor, max_subdomains):
+@click.option("--max-workers", type=int, help="Maximum number of worker threads")
+@click.option("--sequential", is_flag=True, help="Use sequential scanning instead of threading")
+def scan(domain, ethical, monitor, max_subdomains, max_workers, sequential):
     """Scan a domain for subdomains and security issues"""
-    result = run_scan_logic(domain, ethical, monitor, max_subdomains)
+
+    # Show threading information
+    if not sequential:
+        optimal_threads = get_optimal_thread_count()
+        actual_threads = max_workers or optimal_threads
+        if ethical:
+            actual_threads = min(actual_threads, 3)
+
+        print(f"💫 Thread Pool Scanning Enabled")
+        print(f"   System optimal: {optimal_threads} threads")
+        print(f"   Using: {actual_threads} threads")
+        print(f"   Ethical mode: {'ON' if ethical else 'OFF'}")
+    else:
+        print("🔄 Sequential Scanning Mode")
+
+    result = run_scan_logic(
+        domain,
+        ethical,
+        monitor,
+        max_subdomains,
+        max_workers,
+        use_threading=not sequential
+    )
+
     if not result.get("success", False):
         exit(1)
 
@@ -356,9 +449,113 @@ def clear():
         print(f"Failed to clear database: {e}")
 
 @cli.command()
+def benchmark():
+    """Benchmark sequential vs threaded scanning performance"""
+    test_domains = ['google.com', 'github.com', 'stackoverflow.com']
+
+    print("🚀 Aegis-Lite Performance Benchmark")
+    print("=" * 50)
+
+    # Test sequential scanning
+    print("\n📊 Testing Sequential Scanning...")
+    start_time = time.time()
+    result_seq = run_scan_logic("example.com", ethical=True, monitor=False,
+                               max_subdomains=3, use_threading=False)
+    seq_duration = time.time() - start_time
+
+    # Clear database for fair comparison
+    try:
+        database.clear_db()
+        database.init_db()
+    except:
+        pass
+
+    # Test threaded scanning
+    print("\n🧵 Testing Threaded Scanning...")
+    start_time = time.time()
+    result_thread = run_scan_logic("example.com", ethical=True, monitor=False,
+                                  max_subdomains=3, use_threading=True)
+    thread_duration = time.time() - start_time
+
+    # Results
+    print("\n📈 Benchmark Results:")
+    print(f"Sequential: {seq_duration:.2f}s")
+    print(f"Threaded:   {thread_duration:.2f}s")
+
+    if thread_duration > 0:
+        speedup = seq_duration / thread_duration
+        print(f"Speedup:    {speedup:.2f}x")
+
+        if speedup > 1.2:
+            print("✅ Threading provides significant performance improvement!")
+        elif speedup > 1.0:
+            print("✅ Threading provides modest performance improvement")
+        else:
+            print("⚠️  Threading overhead may not be worth it for small scans")
+
+@cli.command()
+def system_info():
+    """Display detailed system information for optimal threading"""
+    try:
+        import psutil
+
+        print("💻 System Information for Threading Optimization")
+        print("=" * 60)
+
+        # CPU Information
+        cpu_count = psutil.cpu_count(logical=False)
+        cpu_count_logical = psutil.cpu_count(logical=True)
+        cpu_freq = psutil.cpu_freq()
+
+        print(f"🔧 CPU Cores:")
+        print(f"   Physical: {cpu_count}")
+        print(f"   Logical:  {cpu_count_logical}")
+        if cpu_freq:
+            print(f"   Frequency: {cpu_freq.current:.2f} MHz")
+
+        # Memory Information
+        memory = psutil.virtual_memory()
+        print(f"\n💾 Memory:")
+        print(f"   Total:     {memory.total / (1024**3):.2f} GB")
+        print(f"   Available: {memory.available / (1024**3):.2f} GB")
+        print(f"   Usage:     {memory.percent:.1f}%")
+
+        # Threading Recommendations
+        optimal_threads = get_optimal_thread_count()
+        print(f"\n🧵 Threading Recommendations:")
+        print(f"   Optimal threads: {optimal_threads}")
+        print(f"   Ethical mode:    {min(optimal_threads, 3)} (recommended)")
+        print(f"   Aggressive mode: {optimal_threads}")
+
+        # Disk Information
+        disk = psutil.disk_usage('.')
+        print(f"\n💿 Disk Space:")
+        print(f"   Total:     {disk.total / (1024**3):.2f} GB")
+        print(f"   Available: {disk.free / (1024**3):.2f} GB")
+        print(f"   Usage:     {(disk.used/disk.total)*100:.1f}%")
+
+        # Network interfaces
+        net_interfaces = psutil.net_if_addrs()
+        print(f"\n🌐 Network Interfaces: {len(net_interfaces)} detected")
+
+        print("\n💡 Performance Tips:")
+        if memory.percent > 80:
+            print("   ⚠️  High memory usage - consider reducing thread count")
+        if cpu_count < 4:
+            print("   ⚠️  Limited CPU cores - threading benefit may be minimal")
+        if optimal_threads >= 6:
+            print("   ✅ Good multi-core system - threading will be beneficial")
+
+    except ImportError:
+        print("❌ psutil not installed - install with: pip install psutil")
+    except Exception as e:
+        print(f"❌ Error getting system info: {e}")
+
+@cli.command()
 def interactive():
     """Start interactive mode for easier use"""
     print("Welcome to Aegis-Lite Interactive Mode!")
+    print("Enhanced with Threading Support 🧵")
     print()
 
     while True:
@@ -369,16 +566,27 @@ def interactive():
             print("3. Generate report")
             print("4. Export data")
             print("5. Clear database")
-            print("6. Exit")
+            print("6. System information")
+            print("7. Performance benchmark")
+            print("8. Exit")
 
-            choice = input("\nEnter your choice (1-6): ").strip()
+            choice = input("\nEnter your choice (1-8): ").strip()
 
             if choice == "1":
                 domain = input("Enter domain to scan (e.g., example.com): ").strip()
                 if domain:
                     ethical = input("Use ethical mode? (Y/n): ").strip().lower() != 'n'
                     monitor = input("Monitor resources? (y/N): ").strip().lower() == 'y'
-                    result = run_scan_logic(domain, ethical, monitor)
+                    threading = input("Enable threading? (Y/n): ").strip().lower() != 'n'
+
+                    if threading:
+                        max_workers = input("Max worker threads (press Enter for auto): ").strip()
+                        max_workers = int(max_workers) if max_workers.isdigit() else None
+                    else:
+                        max_workers = None
+
+                    result = run_scan_logic(domain, ethical, monitor,
+                                          use_threading=threading, max_workers=max_workers)
                     if not result.get("success", False):
                         print("Scan failed. Check output above.")
                 else:
@@ -407,11 +615,18 @@ def interactive():
                     print("Operation cancelled.")
 
             elif choice == "6":
+                subprocess.run(["python", "-m", "aegis.cli", "system-info"])
+
+            elif choice == "7":
+                print("Running performance benchmark...")
+                subprocess.run(["python", "-m", "aegis.cli", "benchmark"])
+
+            elif choice == "8":
                 print("Thank you for using Aegis-Lite!")
                 break
 
             else:
-                print("Invalid choice. Please select 1-6.")
+                print("Invalid choice. Please select 1-8.")
 
         except KeyboardInterrupt:
             print("\nExiting...")

@@ -1,8 +1,12 @@
 """
-Simplified Scanner Module for Aegis-Lite
-=========================================
-Reduced complexity while maintaining functionality
+Enhanced Scanner Module for Aegis-Lite with Thread Pool Support
+===============================================================
+Added concurrent processing while maintaining ethical scanning practices
 """
+
+#nuclei expansion
+import os
+import shlex
 
 import socket
 import time
@@ -12,8 +16,20 @@ import re
 import requests
 import ssl
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
+import psutil
 from .utils import validate_domain, validate_ip, clean_input
+
+# Global locks for thread safety
+print_lock = Lock()
+stats_lock = Lock()
+
+def safe_print(message: str, prefix: str = ""):
+    """Thread-safe printing"""
+    with print_lock:
+        print(f"{prefix}{message}")
 
 def simple_rate_limit():
     """Simple 2-second delay for ethical scanning"""
@@ -22,15 +38,15 @@ def simple_rate_limit():
 def run_subfinder(domain: str, timeout: int = 120) -> List[str]:
     """Run subfinder to find subdomains"""
     if not validate_domain(domain):
-        print(f"Invalid domain: {domain}")
+        safe_print(f"Invalid domain: {domain}")
         return []
 
-    print(f"Finding subdomains for: {domain}")
+    safe_print(f"Finding subdomains for: {domain}")
 
     try:
         subprocess.run(['subfinder', '-h'], capture_output=True, timeout=5)
     except:
-        print("Error: Subfinder not installed")
+        safe_print("Error: Subfinder not installed")
         return []
 
     command = ['subfinder', '-d', clean_input(domain), '-silent']
@@ -46,31 +62,31 @@ def run_subfinder(domain: str, timeout: int = 120) -> List[str]:
                     subdomains.append(line)
 
             subdomains = sorted(list(set(subdomains)))
-            print(f"Found {len(subdomains)} subdomains")
+            safe_print(f"Found {len(subdomains)} subdomains")
             return subdomains
         else:
-            print(f"No subdomains found for {domain}")
+            safe_print(f"No subdomains found for {domain}")
             return []
 
     except subprocess.TimeoutExpired:
-        print(f"Subfinder timed out after {timeout} seconds")
+        safe_print(f"Subfinder timed out after {timeout} seconds")
         return []
     except Exception as e:
-        print(f"Subfinder error: {e}")
+        safe_print(f"Subfinder error: {e}")
         return []
 
 def run_nmap(ip: str, domain: str, ethical: bool = True) -> str:
     """Run nmap port scan"""
     if not validate_ip(ip):
-        print(f"Invalid IP: {ip}")
+        safe_print(f"Invalid IP: {ip}", f"[{domain}] ")
         return ""
 
-    print(f"Scanning ports for: {domain} ({ip})")
+    safe_print(f"Scanning ports for: {domain} ({ip})", f"[{domain}] ")
 
     try:
         subprocess.run(['nmap', '--version'], capture_output=True, timeout=5)
     except:
-        print("Error: Nmap not installed")
+        safe_print("Error: Nmap not installed", f"[{domain}] ")
         return ""
 
     # Port selection based on ethical mode
@@ -94,14 +110,14 @@ def run_nmap(ip: str, domain: str, ethical: bool = True) -> str:
                         open_ports.append(port)
 
         ports_str = ','.join(sorted(open_ports, key=int))
-        print(f"Open ports found: {ports_str}")
+        safe_print(f"Open ports found: {ports_str}", f"[{domain}] ")
         return ports_str
 
     except subprocess.TimeoutExpired:
-        print(f"Nmap scan timed out for {domain}")
+        safe_print(f"Nmap scan timed out for {domain}", f"[{domain}] ")
         return ""
     except Exception as e:
-        print(f"Nmap error: {e}")
+        safe_print(f"Nmap error: {e}", f"[{domain}] ")
         return ""
 
 def resolve_ip(domain: str, timeout: int = 10) -> str:
@@ -118,39 +134,27 @@ def resolve_ip(domain: str, timeout: int = 10) -> str:
     finally:
         socket.setdefaulttimeout(None)
 
-def calculate_score(ports: str) -> int:
-    """Calculate risk score based on open ports"""
+def calculate_score(ports: str, vulns: list = None) -> int:
+    """
+    Calculate risk score using CVSS (preferred) or fallback to port-based scoring.
+    """
+    # If we have CVSS scores from vulnerabilities, use them
+    if vulns:
+        cvss_scores = [v.get("cvss_score") for v in vulns if v.get("cvss_score")]
+        if cvss_scores:
+            return int(max(cvss_scores) * 10)  # normalize 0–10 → 0–100
+
+    # Otherwise, fallback: simpler heuristic
     if not ports:
         return 0
 
-    risk_score = 10  # Base score
     port_list = [p.strip() for p in ports.split(',') if p.strip()]
+    # Simple baseline: each risky service adds 10 points
+    risky_ports = {"21", "23", "25", "135", "445", "3389"}
+    score = sum(10 if p not in risky_ports else 20 for p in port_list)
 
-    # Port-based risk scoring
-    port_risks = {
-        '443': 5,   # HTTPS - secure
-        '80': 15,   # HTTP - insecure
-        '22': 25,   # SSH
-        '23': 30,   # Telnet - very insecure
-        '135': 25,  # RPC
-        '445': 25,  # SMB
-        '3389': 25, # RDP
-        '21': 20,   # FTP
-        '25': 20,   # SMTP
-        '53': 15,   # DNS
-    }
+    return min(100, score)
 
-    for port in port_list:
-        risk_score += port_risks.get(port, 10)  # Default 10 for unknown ports
-
-    # Additional penalties
-    if '80' in port_list and '443' not in port_list:
-        risk_score += 15  # No encryption available
-
-    if len(port_list) > 5:
-        risk_score += 20  # Large attack surface
-
-    return max(0, min(100, risk_score))
 
 def check_https(domain: str) -> Dict[str, Any]:
     """Check HTTPS availability and certificate status"""
@@ -209,60 +213,104 @@ def check_https(domain: str) -> Dict[str, Any]:
 
     return result
 
-def check_web_vulnerabilities(url: str) -> Dict[str, Any]:
-    """Check for web vulnerabilities using nuclei"""
+def update_nuclei_templates() -> Dict[str, Any]:
+    """
+    Try to update nuclei templates via CLI. Returns status dict.
+    """
+    try:
+        result = subprocess.run(["nuclei", "-ut"], capture_output=True, text=True, timeout=120)
+        return {"updated": result.returncode == 0, "stdout": result.stdout, "stderr": result.stderr}
+    except Exception as e:
+        return {"updated": False, "error": str(e)}
+
+def check_web_vulnerabilities(url: str,
+                              tags: str = "cves,exposed-panels,vulnerabilities,misconfiguration",
+                              severity: str = None,
+                              templates_dir: str = None,
+                              timeout: int = 180) -> Dict[str, Any]:
+    """
+    Run nuclei against 'url' with optional tag/severity filters and return parsed results.
+    - tags: comma-separated tags to restrict templates (None => all)
+    - severity: comma-separated severity filter (e.g. 'critical,high')
+    - templates_dir: optional path to nuclei templates (overrides default)
+    """
     result = {
         "vulnerabilities": [],
         "has_admin_panel": False,
         "scan_completed": False,
-        "error": None
+        "error": None,
+        "raw": ""
     }
 
     if not url or not url.startswith(('http://', 'https://')):
         result["error"] = "Invalid URL"
         return result
 
+    # Prefer explicit templates_dir -> else rely on nuclei builtin locations
+    templates_dir = templates_dir or os.environ.get("NUCLEI_TEMPLATES_DIR")
+
+    cmd = ["nuclei", "-target", url, "-json", "-silent", "-retries", "1", "-timeout", "10"]
+    # If templates_dir supplied, point nuclei at it
+    if templates_dir:
+        cmd.extend(["-t", templates_dir])
+
+    # tags filter (prefer tags over templates list)
+    if tags:
+        cmd.extend(["-tags", tags])
+
+    if severity:
+        cmd.extend(["-severity", severity])
+
+    # Consider adding a rate limit if you want: cmd.extend(["-rate-limit", "10"])
+
     try:
-        subprocess.run(['nuclei', '-version'], capture_output=True, timeout=5)
-    except:
-        result["error"] = "Nuclei not installed"
-        return result
-
-    command = [
-        "nuclei", "-target", url, "-json", "-silent",
-        "-t", "cves,exposed-panels,vulnerabilities,misconfiguration",
-        "-timeout", "10", "-retries", "1"
-    ]
-
-    try:
-        print(f"Checking vulnerabilities for: {url}")
-
-        result_process = subprocess.run(
-            command, capture_output=True, text=True, timeout=180
-        )
-
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result["raw"] = proc.stdout
         result["scan_completed"] = True
 
-        for line in result_process.stdout.strip().split('\n'):
-            if line.strip():
-                try:
-                    vuln_data = json.loads(line)
-                    vulnerability = {
-                        "name": vuln_data.get("info", {}).get("name", "Unknown"),
-                        "severity": vuln_data.get("info", {}).get("severity", "info"),
-                        "template": vuln_data.get("template-id", "unknown")
-                    }
-                    result["vulnerabilities"].append(vulnerability)
+        seen = set()
+        for line in proc.stdout.strip().splitlines():
+            if not line.strip():
+                continue
+            try:
+                vuln_data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
-                    # Check for admin panels
-                    template_id = vuln_data.get("template-id", "").lower()
-                    vuln_name = vulnerability["name"].lower()
-                    if any(keyword in template_id or keyword in vuln_name
-                           for keyword in ["admin", "panel", "login", "dashboard"]):
-                        result["has_admin_panel"] = True
+            info = vuln_data.get("info", {}) or {}
+            template_id = vuln_data.get("template-id") or info.get("name") or vuln_data.get("id")
+            severity_field = info.get("severity", "") or vuln_data.get("severity", "")
+            # Attempt to find cvss from different possible fields
+            cvss_score = None
+            for key in ("cvss", "cvss-score", "cvss_v3", "cvss_v2"):
+                v = info.get(key) or vuln_data.get(key)
+                if v:
+                    try:
+                        cvss_score = float(v)
+                        break
+                    except Exception:
+                        # some templates embed cvss vectors; leave as None
+                        pass
 
-                except json.JSONDecodeError:
-                    continue
+            vuln_key = f"{template_id}:{vuln_data.get('matched-at', '')}"
+            if vuln_key in seen:
+                continue
+            seen.add(vuln_key)
+
+            vulnerability = {
+                "name": info.get("name", template_id),
+                "severity": (severity_field or "info").lower(),
+                "template": template_id,
+                "cvss_score": cvss_score  # may be None
+            }
+
+            # Heuristic: template id / name may indicate admin panels / dashboards
+            tlow = (template_id or "").lower()
+            nlow = (vulnerability["name"] or "").lower()
+            if any(k in tlow or k in nlow for k in ["admin", "panel", "login", "dashboard"]):
+                result["has_admin_panel"] = True
+
+            result["vulnerabilities"].append(vulnerability)
 
     except subprocess.TimeoutExpired:
         result["error"] = "Scan timed out"
@@ -271,19 +319,203 @@ def check_web_vulnerabilities(url: str) -> Dict[str, Any]:
 
     return result
 
+
 def show_system_resources():
     """Simple system resource display"""
     try:
-        import psutil
         cpu = psutil.cpu_percent()
         ram = psutil.virtual_memory().percent
-        print(f"System Resources - CPU: {cpu:.1f}%, RAM: {ram:.1f}%")
+        safe_print(f"System Resources - CPU: {cpu:.1f}%, RAM: {ram:.1f}%")
     except ImportError:
-        print("System resource monitoring not available")
+        safe_print("System resource monitoring not available")
+
+def get_optimal_thread_count() -> int:
+    """Calculate optimal thread count based on system resources"""
+    try:
+        # Get system info
+        cpu_count = psutil.cpu_count()
+        memory_gb = psutil.virtual_memory().total / (1024**3)
+
+        # Conservative approach for SMEs
+        # Use fewer threads to avoid overwhelming target servers
+        if memory_gb < 4:
+            return min(3, cpu_count)
+        elif memory_gb < 8:
+            return min(5, cpu_count)
+        else:
+            return min(8, cpu_count)
+    except:
+        return 3  # Safe default
+
+def scan_single_domain(domain: str, ethical: bool, scan_stats: Dict[str, Any],
+                      domain_index: int, total_domains: int) -> Optional[Dict[str, Any]]:
+    """Scan a single domain - thread worker function"""
+    thread_prefix = f"[{domain_index:02d}/{total_domains:02d}] "
+
+    try:
+        # Ethical rate limiting
+        if ethical and domain_index > 1:
+            safe_print("Waiting 2 seconds (ethical mode)...", thread_prefix)
+            simple_rate_limit()
+
+        safe_print(f"Starting scan: {domain}", thread_prefix)
+
+        # Resolve IP
+        safe_print("→ Resolving IP...", thread_prefix)
+        ip = resolve_ip(domain, timeout=10)
+        if ip == "Unknown":
+            safe_print("✗ Could not resolve IP", thread_prefix)
+            with stats_lock:
+                scan_stats["failed_scans"] += 1
+            return None
+
+        safe_print(f"→ IP: {ip}", thread_prefix)
+
+        # Scan ports
+        safe_print("→ Scanning ports...", thread_prefix)
+        ports = run_nmap(ip, domain, ethical)
+
+        # Check HTTPS
+        safe_print("→ Checking HTTPS...", thread_prefix)
+        https_result = check_https(domain)
+
+        # Check web vulnerabilities if HTTP/HTTPS is available
+        web_result = {"vulnerabilities": [], "has_admin_panel": False}
+        if ports and ('80' in ports or '443' in ports):
+            safe_print("→ Checking vulnerabilities...", thread_prefix)
+            protocol = "https" if '443' in ports else "http"
+            web_result = check_web_vulnerabilities(f"{protocol}://{domain}")
+
+        # Calculate risk score
+        score = calculate_score(ports)
+
+        # Prepare result data
+        result_data = {
+            "domain": domain,
+            "ip": ip,
+            "ports": ports,
+            "score": score,
+            "ssl_vulnerabilities": json.dumps(https_result),
+            "web_vulnerabilities": json.dumps(web_result)
+        }
+
+        safe_print(f"✓ Completed: Score {score}, Ports: {ports or 'none'}", thread_prefix)
+
+        with stats_lock:
+            scan_stats["successful_scans"] += 1
+
+        return result_data
+
+    except Exception as e:
+        safe_print(f"✗ Error scanning {domain}: {e}", thread_prefix)
+        with stats_lock:
+            scan_stats["failed_scans"] += 1
+        return None
+
+def scan_domains_concurrent(domains_to_scan: List[str], ethical: bool,
+                          max_workers: Optional[int] = None) -> List[Dict[str, Any]]:
+    """
+    Scan multiple domains concurrently using ThreadPoolExecutor
+
+    Args:
+        domains_to_scan: List of domains to scan
+        ethical: Whether to use ethical scanning mode
+        max_workers: Maximum number of worker threads (auto-calculated if None)
+
+    Returns:
+        List of scan results
+    """
+    if not domains_to_scan:
+        return []
+
+    # Calculate optimal thread count if not specified
+    if max_workers is None:
+        max_workers = get_optimal_thread_count()
+
+    # Adjust for ethical scanning (reduce concurrent requests)
+    if ethical:
+        max_workers = min(max_workers, 3)
+
+    safe_print(f"Using {max_workers} worker threads for concurrent scanning")
+
+    # Initialize shared statistics
+    scan_stats = {
+        "successful_scans": 0,
+        "failed_scans": 0
+    }
+
+    results = []
+
+    # Use ThreadPoolExecutor for concurrent scanning
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all scan tasks
+        future_to_domain = {
+            executor.submit(
+                scan_single_domain,
+                domain,
+                ethical,
+                scan_stats,
+                i,
+                len(domains_to_scan)
+            ): domain
+            for i, domain in enumerate(domains_to_scan, 1)
+        }
+
+        # Collect results as they complete
+        for future in as_completed(future_to_domain):
+            domain = future_to_domain[future]
+            try:
+                result = future.result()
+                if result:
+                    results.append(result)
+            except Exception as e:
+                safe_print(f"Thread exception for {domain}: {e}")
+                with stats_lock:
+                    scan_stats["failed_scans"] += 1
+
+    safe_print(f"\nConcurrent scan completed:")
+    safe_print(f"  Successful: {scan_stats['successful_scans']}")
+    safe_print(f"  Failed: {scan_stats['failed_scans']}")
+
+    return results
+
+def monitor_system_resources(threshold_cpu: float = 80.0, threshold_ram: float = 85.0) -> Dict[str, Any]:
+    """
+    Monitor system resources during scanning
+
+    Args:
+        threshold_cpu: CPU usage threshold (%)
+        threshold_ram: RAM usage threshold (%)
+
+    Returns:
+        Dictionary with resource status
+    """
+    try:
+        cpu_percent = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+
+        status = {
+            "cpu_percent": cpu_percent,
+            "ram_percent": memory.percent,
+            "available_ram_gb": memory.available / (1024**3),
+            "cpu_overloaded": cpu_percent > threshold_cpu,
+            "ram_overloaded": memory.percent > threshold_ram,
+            "system_healthy": cpu_percent <= threshold_cpu and memory.percent <= threshold_ram
+        }
+
+        if not status["system_healthy"]:
+            safe_print("⚠️  System resources are under high load!")
+            safe_print(f"   CPU: {cpu_percent:.1f}% | RAM: {memory.percent:.1f}%")
+
+        return status
+
+    except Exception as e:
+        safe_print(f"Resource monitoring error: {e}")
+        return {"system_healthy": True, "error": str(e)}
 
 def test_scanners():
-    """Simple test function for scanners"""
-    print("Testing Aegis-Lite scanners...")
+    """Enhanced test function for scanners including thread pool"""
+    print("Testing Aegis-Lite scanners with thread pool...")
 
     # Test DNS resolution
     print("Testing DNS resolution...")
@@ -299,6 +531,18 @@ def test_scanners():
     print(f"High-risk ports score: {score_high}")
 
     assert score_high > score_low, "High-risk ports should have higher score"
+
+    # Test thread pool functionality
+    print("Testing thread pool with dummy domains...")
+    test_domains = ['google.com', 'github.com']
+    results = scan_domains_concurrent(test_domains, ethical=True, max_workers=2)
+    print(f"Thread pool test completed: {len(results)} results")
+
+    # Test resource monitoring
+    print("Testing resource monitoring...")
+    resources = monitor_system_resources()
+    print(f"System status: {'Healthy' if resources.get('system_healthy') else 'Overloaded'}")
+
     print("All tests completed successfully!")
 
 if __name__ == "__main__":
