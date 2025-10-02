@@ -28,7 +28,9 @@ def validate_domain(domain: str) -> bool:
     """Single source of truth for domain validation"""
     if not domain or len(domain) > 253:
         return False
-    return bool(re.match(r'^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]$', domain))
+    # Improved regex to catch double dots and invalid patterns
+    pattern = r'^(?!.*\.\.)([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+    return bool(re.match(pattern, domain))
 
 def validate_ip(ip: str) -> bool:
     """Check if IP format is valid"""

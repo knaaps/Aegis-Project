@@ -1,13 +1,25 @@
 [project]
 name = "aegis-lite"
-version = "0.1.0"
+version = "3.0.0"
 description = "Ethical attack surface scanner for SMEs"
+readme = "README.md"  
 authors = [{ name = "vinayak", email = "vinayak4x@gmail.com" }]
+license = { text = "MIT" }  
 requires-python = ">=3.10"
+keywords = ["security", "scanner", "cybersecurity", "sme"] # keywords
 dependencies = [
     "click>=8.1.7",
     "psutil>=6.0.0",
+    "streamlit>=1.28.0",  #core dependencies
+    "pandas>=2.1.0",
+    "requests>=2.31.0"
 ]
+
+# Add important project URLs
+[project.urls]
+Homepage = "https://github.com/knaaps/Aegis-project"
+Repository = "https://github.com/knaaps/Aegis-project"
+"Bug Tracker" = "https://github.com/knaaps/Aegis-project/issues"
 
 [project.scripts]
 aegis = "aegis.cli:cli"

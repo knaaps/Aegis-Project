@@ -13,7 +13,10 @@ from typing import Dict, Any
 import uuid
 
 from aegis import database
+from aegis.database import get_all_assets, get_db_stats
+
 from aegis.utils import validate_domain, clean_input
+
 from aegis.scanners import (
     run_subfinder, scan_domains_concurrent, show_system_resources,
     monitor_system_resources, get_optimal_thread_count
@@ -449,51 +452,6 @@ def clear():
         print(f"Failed to clear database: {e}")
 
 @cli.command()
-def benchmark():
-    """Benchmark sequential vs threaded scanning performance"""
-    test_domains = ['google.com', 'github.com', 'stackoverflow.com']
-
-    print("🚀 Aegis-Lite Performance Benchmark")
-    print("=" * 50)
-
-    # Test sequential scanning
-    print("\n📊 Testing Sequential Scanning...")
-    start_time = time.time()
-    result_seq = run_scan_logic("example.com", ethical=True, monitor=False,
-                               max_subdomains=3, use_threading=False)
-    seq_duration = time.time() - start_time
-
-    # Clear database for fair comparison
-    try:
-        database.clear_db()
-        database.init_db()
-    except:
-        pass
-
-    # Test threaded scanning
-    print("\n🧵 Testing Threaded Scanning...")
-    start_time = time.time()
-    result_thread = run_scan_logic("example.com", ethical=True, monitor=False,
-                                  max_subdomains=3, use_threading=True)
-    thread_duration = time.time() - start_time
-
-    # Results
-    print("\n📈 Benchmark Results:")
-    print(f"Sequential: {seq_duration:.2f}s")
-    print(f"Threaded:   {thread_duration:.2f}s")
-
-    if thread_duration > 0:
-        speedup = seq_duration / thread_duration
-        print(f"Speedup:    {speedup:.2f}x")
-
-        if speedup > 1.2:
-            print("✅ Threading provides significant performance improvement!")
-        elif speedup > 1.0:
-            print("✅ Threading provides modest performance improvement")
-        else:
-            print("⚠️  Threading overhead may not be worth it for small scans")
-
-@cli.command()
 def system_info():
     """Display detailed system information for optimal threading"""
     try:
@@ -560,16 +518,7 @@ def interactive():
 
     while True:
         try:
-            print("--- Main Menu ---")
-            print("1. Scan a domain")
-            print("2. View results")
-            print("3. Generate report")
-            print("4. Export data")
-            print("5. Clear database")
-            print("6. System information")
-            print("7. Performance benchmark")
-            print("8. Exit")
-
+            print("--- Main Menu --- \n1. Scan a domain \n2. View results \n3. Generate report \n4. Export data \n5. Clear database \n6. System information \n7. Performance benchmark \n8. Exit")
             choice = input("\nEnter your choice (1-8): ").strip()
 
             if choice == "1":
@@ -635,6 +584,78 @@ def interactive():
             print(f"Error: {e}")
 
         print()  # Add spacing
+
+@cli.command()
+@click.option("--domains", default=3, help="Number of test domains")
+def benchmark(domains):
+    """Run performance benchmark"""
+    import time
+    from aegis.scanners import resolve_ip
+    
+    print("🏃 Running Aegis-Lite Benchmark...")
+    
+    test_domains = ["google.com", "github.com", "stackoverflow.com"][:domains]
+    
+    start_time = time.time()
+    results = []
+    
+    for domain in test_domains:
+        domain_start = time.time()
+        ip = resolve_ip(domain)
+        domain_time = time.time() - domain_start
+        results.append({
+            "domain": domain,
+            "ip": ip,
+            "time": domain_time
+        })
+        print(f"✓ {domain}: {domain_time:.2f}s")
+    
+    total_time = time.time() - start_time
+    avg_time = total_time / len(test_domains)
+    
+    print(f"\n📊 Benchmark Results:")
+    print(f"   Total time: {total_time:.2f}s")
+    print(f"   Average per domain: {avg_time:.2f}s")
+    print(f"   Domains/minute: {(60/avg_time):.1f}")
+
+def generate_executive_summary():
+    """Generate executive-friendly summary"""
+    import time
+    assets = get_all_assets()
+    
+    if not assets:
+        return "No assets scanned yet."
+    
+    total = len(assets)
+    critical = len([a for a in assets if a.get('score', 0) >= 70])
+    high = len([a for a in assets if 50 <= a.get('score', 0) < 70])
+    
+    summary = f"""
+EXECUTIVE SUMMARY
+================
+Scan Date: {time.strftime('%Y-%m-%d %H:%M')}
+Total Assets Scanned: {total}
+
+RISK OVERVIEW:
+- Critical Risk Assets: {critical}
+- High Risk Assets: {high}
+- Immediate Action Required: {critical + high} assets
+
+RECOMMENDATIONS:
+"""
+    if critical > 0:
+        summary += "1. URGENT: Address critical risk assets immediately\n"
+    if high > 0:
+        summary += "2. HIGH: Remediate high-risk vulnerabilities within 7 days\n"
+    summary += "3. Implement continuous monitoring\n"
+    summary += "4. Schedule regular security assessments"
+    
+    return summary
+
+@cli.command()
+def summary():
+    """Generate executive summary report"""
+    print(generate_executive_summary())
 
 if __name__ == '__main__':
     cli()

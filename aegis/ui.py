@@ -234,8 +234,8 @@ def main():
                         else:
                             return 'color: gray'
 
-                    styled_df = df.style.applymap(color_risk_score, subset=['Risk Score'])
-                    st.dataframe(styled_df, use_container_width=True)
+                    styled_df = df.style.map(color_risk_score, subset=['Risk Score'])
+                    st.dataframe(styled_df, width='stretch')
 
                     # Vulnerability details
                     vuln_assets = []

@@ -545,5 +545,82 @@ def test_scanners():
 
     print("All tests completed successfully!")
 
+def enhanced_ssl_analysis(domain: str):
+    """Enhanced SSL/TLS analysis"""
+    import ssl
+    import socket
+    from datetime import datetime, timezone
+    
+    result = {
+        "domain": domain,
+        "grade": "F",
+        "issues": [],
+        "certificate": {}
+    }
+    
+    try:
+        context = ssl.create_default_context()
+        
+        with socket.create_connection((domain, 443), timeout=10) as sock:
+            with context.wrap_socket(sock, server_hostname=domain) as ssock:
+                cert = ssock.getpeercert()
+                
+                # Certificate details
+                result["certificate"] = {
+                    "subject": dict(x[0] for x in cert['subject']),
+                    "issuer": dict(x[0] for x in cert['issuer']),
+                    "not_before": cert['notBefore'],
+                    "not_after": cert['notAfter']
+                }
+                
+                # Check expiry
+                expiry = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
+                expiry = expiry.replace(tzinfo=timezone.utc)
+                days_left = (expiry - datetime.now(timezone.utc)).days
+                
+                if days_left < 0:
+                    result["issues"].append("CRITICAL: Certificate expired")
+                    result["grade"] = "F"
+                elif days_left < 30:
+                    result["issues"].append(f"WARNING: Certificate expires in {days_left} days")
+                    result["grade"] = "C"
+                else:
+                    result["grade"] = "A"
+                    
+    except Exception as e:
+        result["issues"].append(f"SSL Error: {str(e)}")
+        
+    return result
+
+def calculate_advanced_score(ports: str, vulns: list = None, ssl_grade: str = "F") -> int:
+    """Enhanced risk scoring"""
+    score = 0
+    
+    # Port-based scoring
+    if ports:
+        port_list = ports.split(',')
+        for port in port_list:
+            if port in ["21", "22", "23", "135", "445", "3389"]:
+                score += 10
+            else:
+                score += 2
+    
+    # Vulnerability scoring
+    if vulns:
+        for vuln in vulns:
+            severity = vuln.get("severity", "").lower()
+            if severity == "critical":
+                score += 15
+            elif severity == "high":
+                score += 10
+    
+    # SSL scoring
+    if ssl_grade == "F":
+        score += 10
+    elif ssl_grade == "C":
+        score += 5
+    
+    return min(100, score)
+
 if __name__ == "__main__":
     test_scanners()

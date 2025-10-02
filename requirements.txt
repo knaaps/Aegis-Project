@@ -1,5 +1,5 @@
-# Aegis-Lite Requirements - Simplified Version
-# Essential dependencies for student project
+# Aegis Requirements -
+# Essential dependencies
 
 # Core CLI framework
 click==8.1.7
@@ -11,7 +11,7 @@ pandas==2.1.0
 # HTTP requests for simple SSL checking
 requests==2.31.0
 
-# System monitoring (optional but useful)
+# System monitoring
 psutil==5.9.5
 
 # Testing framework
@@ -29,4 +29,4 @@ pytest-cov==4.1.0
 # - re (regex validation)
 # - uuid (scan ID generation)
 # - logging (basic logging)
-# - threading (if needed for future enhancements)
+# - threading (future enhancements)
