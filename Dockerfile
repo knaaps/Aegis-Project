@@ -5,12 +5,19 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     nmap \
+    git \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy application - FIXED PATHS
-COPY requirements.txt .
+# Install Go-based security tools
+RUN wget https://github.com/projectdiscovery/subfinder/releases/download/v2.6.3/subfinder_2.6.3_linux_amd64.tar.gz \
+    && tar -xzf subfinder_2.6.3_linux_amd64.tar.gz \
+    && mv subfinder /usr/local/bin/ \
+    && rm subfinder_2.6.3_linux_amd64.tar.gz
+
+# Copy application
+COPY . .
 COPY aegis/ ./aegis/
-COPY tests/ ./tests/
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -18,5 +25,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Set Python path
 ENV PYTHONPATH=/app
 
-# Default command - CLI interactive mode
+# Expose Streamlit port
+EXPOSE 8501
+
+# Default command - can run either CLI or UI
 CMD ["python", "-m", "aegis.cli", "interactive"]

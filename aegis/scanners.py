@@ -1,13 +1,10 @@
 """
 Enhanced Scanner Module for Aegis-Lite with Thread Pool Support
 ===============================================================
-Added concurrent processing while maintaining ethical scanning practices
+Optimized version with unused functions removed
 """
 
-#nuclei expansion
 import os
-import shlex
-
 import socket
 import time
 import subprocess
@@ -21,6 +18,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 import psutil
 from .utils import validate_domain, validate_ip, clean_input
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Global locks for thread safety
 print_lock = Lock()
@@ -134,27 +135,61 @@ def resolve_ip(domain: str, timeout: int = 10) -> str:
     finally:
         socket.setdefaulttimeout(None)
 
-def calculate_score(ports: str, vulns: list = None) -> int:
+def calculate_score(ports: str, vulns: list = None, https_data: dict = None, 
+                   directory_data: dict = None) -> int:
     """
-    Calculate risk score using CVSS (preferred) or fallback to port-based scoring.
+    Proper risk scoring based on actual security issues
     """
-    # If we have CVSS scores from vulnerabilities, use them
+
+    logger.info(f"calculate_score called: ports={ports}, vulns={vulns}")
+
+    score = 0
+    
+    # 1. VULNERABILITY SEVERITY (highest priority)
     if vulns:
-        cvss_scores = [v.get("cvss_score") for v in vulns if v.get("cvss_score")]
+        cvss_scores = [v.get("cvss_score", 0) for v in vulns if v.get("cvss_score")]
         if cvss_scores:
-            return int(max(cvss_scores) * 10)  # normalize 0–10 → 0–100
-
-    # Otherwise, fallback: simpler heuristic
-    if not ports:
-        return 0
-
-    port_list = [p.strip() for p in ports.split(',') if p.strip()]
-    # Simple baseline: each risky service adds 10 points
-    risky_ports = {"21", "23", "25", "135", "445", "3389"}
-    score = sum(10 if p not in risky_ports else 20 for p in port_list)
-
+            # Critical vulnerabilities should dominate the score
+            max_cvss = max(cvss_scores)
+            score += int(max_cvss * 10)  # CVSS 9.0 = 90 points
+    
+    # 2. EXPOSED ADMIN PANELS / SENSITIVE FILES (critical)
+    if directory_data:
+        admin_count = len(directory_data.get('admin_panels', []))
+        sensitive_count = len(directory_data.get('sensitive_files', []))
+        score += (admin_count * 15) + (sensitive_count * 20)
+    
+    # 3. DANGEROUS SERVICES (medium priority)
+    if ports:
+        port_list = [p.strip() for p in ports.split(',') if p.strip()]
+        dangerous_ports = {
+            "21": 15,   # FTP
+            "22": 10,   # SSH (acceptable if secured)
+            "23": 25,   # Telnet (unencrypted!)
+            "135": 20,  # RPC
+            "445": 20,  # SMB
+            "3306": 15, # MySQL
+            "3389": 15, # RDP
+            "5432": 15  # PostgreSQL
+        }
+        
+        for port in port_list:
+            score += dangerous_ports.get(port, 0)
+    
+    # 4. HTTPS ISSUES (lower priority but still relevant)
+    if https_data:
+        if not https_data.get('has_https'):
+            score += 10  # No HTTPS at all
+        elif not https_data.get('valid_cert'):
+            score += 15  # Invalid certificate
+        elif https_data.get('cert_expires_soon'):
+            score += 5   # Expiring soon
+    
+    # 5. PORT 8080 (often indicates misconfiguration)
+    if ports and '8080' in ports:
+        score += 5  # Minor risk - alternative HTTP port
+    
     return min(100, score)
-
 
 def check_https(domain: str) -> Dict[str, Any]:
     """Check HTTPS availability and certificate status"""
@@ -213,26 +248,12 @@ def check_https(domain: str) -> Dict[str, Any]:
 
     return result
 
-def update_nuclei_templates() -> Dict[str, Any]:
-    """
-    Try to update nuclei templates via CLI. Returns status dict.
-    """
-    try:
-        result = subprocess.run(["nuclei", "-ut"], capture_output=True, text=True, timeout=120)
-        return {"updated": result.returncode == 0, "stdout": result.stdout, "stderr": result.stderr}
-    except Exception as e:
-        return {"updated": False, "error": str(e)}
-
 def check_web_vulnerabilities(url: str,
                               tags: str = "cves,exposed-panels,vulnerabilities,misconfiguration",
                               severity: str = None,
-                              templates_dir: str = None,
                               timeout: int = 180) -> Dict[str, Any]:
     """
     Run nuclei against 'url' with optional tag/severity filters and return parsed results.
-    - tags: comma-separated tags to restrict templates (None => all)
-    - severity: comma-separated severity filter (e.g. 'critical,high')
-    - templates_dir: optional path to nuclei templates (overrides default)
     """
     result = {
         "vulnerabilities": [],
@@ -246,22 +267,14 @@ def check_web_vulnerabilities(url: str,
         result["error"] = "Invalid URL"
         return result
 
-    # Prefer explicit templates_dir -> else rely on nuclei builtin locations
-    templates_dir = templates_dir or os.environ.get("NUCLEI_TEMPLATES_DIR")
-
     cmd = ["nuclei", "-target", url, "-json", "-silent", "-retries", "1", "-timeout", "10"]
-    # If templates_dir supplied, point nuclei at it
-    if templates_dir:
-        cmd.extend(["-t", templates_dir])
 
-    # tags filter (prefer tags over templates list)
+    # tags filter
     if tags:
         cmd.extend(["-tags", tags])
 
     if severity:
         cmd.extend(["-severity", severity])
-
-    # Consider adding a rate limit if you want: cmd.extend(["-rate-limit", "10"])
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -289,7 +302,6 @@ def check_web_vulnerabilities(url: str,
                         cvss_score = float(v)
                         break
                     except Exception:
-                        # some templates embed cvss vectors; leave as None
                         pass
 
             vuln_key = f"{template_id}:{vuln_data.get('matched-at', '')}"
@@ -319,7 +331,6 @@ def check_web_vulnerabilities(url: str,
 
     return result
 
-
 def show_system_resources():
     """Simple system resource display"""
     try:
@@ -337,7 +348,6 @@ def get_optimal_thread_count() -> int:
         memory_gb = psutil.virtual_memory().total / (1024**3)
 
         # Conservative approach for SMEs
-        # Use fewer threads to avoid overwhelming target servers
         if memory_gb < 4:
             return min(3, cpu_count)
         elif memory_gb < 8:
@@ -346,6 +356,91 @@ def get_optimal_thread_count() -> int:
             return min(8, cpu_count)
     except:
         return 3  # Safe default
+
+def enhance_score_with_directories(base_score: int, directory_result: Dict[str, Any]) -> int:
+    """Enhance risk score based on directory discovery findings"""
+    enhanced_score = base_score
+    
+    # Critical findings
+    if directory_result.get('admin_panels'):
+        enhanced_score += len(directory_result['admin_panels']) * 10
+    
+    if directory_result.get('sensitive_files'):
+        enhanced_score += len(directory_result['sensitive_files']) * 15
+    
+    # API endpoints might be normal, but add slight risk
+    if directory_result.get('api_endpoints'):
+        enhanced_score += len(directory_result['api_endpoints']) * 5
+        
+    return min(100, enhanced_score)
+
+
+def discover_directories(url: str, ethical: bool = True) -> Dict[str, Any]:
+    """Lightweight directory discovery using common paths"""
+    
+    common_paths = [
+        "admin", "administrator", "login", "wp-admin", "phpmyadmin",
+        "api", "backup", "config", "database", ".git", ".env",
+        "robots.txt", "sitemap.xml", "swagger", "api-docs",
+        ".DS_Store", "web.config", ".htaccess"
+    ]
+    
+    if not ethical:
+        common_paths.extend([
+            "test", "temp", "tmp", "backup.sql", "dump.sql",
+            "config.php", "settings.php", "wp-config.php"
+        ])
+    
+    result = {
+        "found_paths": [],
+        "admin_panels": [],
+        "sensitive_files": [],
+        "api_endpoints": []
+    }
+    
+    session = requests.Session()
+    session.headers.update({'User-Agent': 'Aegis-Lite Security Scanner'})
+    status_sizes = {}
+
+    for path in common_paths:
+        if ethical:
+            time.sleep(0.5)  # Rate limiting
+            
+        try:
+            full_url = f"{url.rstrip('/')}/{path}"
+            response = session.get(full_url, timeout=5, allow_redirects=False)
+
+            size = len(response.content)
+            status_key = f"{response.status_code}_{size}"
+
+            if response.status_code in [403, 404]:
+                status_sizes[status_key] = status_sizes.get(status_key, 0) + 1
+                # If we've seen this exact status+size combo 3+ times, it's an error page
+                if status_sizes[status_key] >= 3:
+                    continue
+            
+            if response.status_code in [200, 301, 302, 401]:
+                finding = {
+                    "path": path,
+                    "url": full_url,
+                    "status_code": response.status_code,
+                    "size": size
+                }
+                
+                result["found_paths"].append(finding)
+                
+                # Categorize findings
+                if any(admin in path.lower() for admin in ["admin", "login", "phpmyadmin"]):
+                    result["admin_panels"].append(finding)
+                elif any(ext in path for ext in [".sql", ".env", ".git", "config"]):
+                    result["sensitive_files"].append(finding)
+                elif "api" in path.lower() or "swagger" in path.lower():
+                    result["api_endpoints"].append(finding)
+                    
+        except requests.RequestException:
+            continue
+            
+    return result
 
 def scan_single_domain(domain: str, ethical: bool, scan_stats: Dict[str, Any],
                       domain_index: int, total_domains: int) -> Optional[Dict[str, Any]]:
@@ -381,28 +476,44 @@ def scan_single_domain(domain: str, ethical: bool, scan_stats: Dict[str, Any],
 
         # Check web vulnerabilities if HTTP/HTTPS is available
         web_result = {"vulnerabilities": [], "has_admin_panel": False}
+        directory_result = {"found_paths": [], "admin_panels": [], "sensitive_files": [], "api_endpoints": []}
+        
         if ports and ('80' in ports or '443' in ports):
             safe_print("→ Checking vulnerabilities...", thread_prefix)
             protocol = "https" if '443' in ports else "http"
-            web_result = check_web_vulnerabilities(f"{protocol}://{domain}")
+            target_url = f"{protocol}://{domain}"
+            
+            web_result = check_web_vulnerabilities(target_url)
+
+            safe_print("→ Discovering directories...", thread_prefix)
+            directory_result = discover_directories(target_url, ethical)
 
         # Calculate risk score
-        score = calculate_score(ports)
+        base_score = calculate_score(ports)
+
+        enhanced_score = enhance_score_with_directories(base_score, directory_result)
 
         # Prepare result data
         result_data = {
             "domain": domain,
             "ip": ip,
             "ports": ports,
-            "score": score,
+            "score": enhanced_score,
             "ssl_vulnerabilities": json.dumps(https_result),
-            "web_vulnerabilities": json.dumps(web_result)
+            "web_vulnerabilities": json.dumps(web_result),
+            "directory_discovery": json.dumps(directory_result)  # NEW FIELD
         }
 
-        safe_print(f"✓ Completed: Score {score}, Ports: {ports or 'none'}", thread_prefix)
+        safe_print(f"✓ Completed: Score {enhanced_score}, Ports: {ports or 'none'}", thread_prefix)
 
         with stats_lock:
             scan_stats["successful_scans"] += 1
+
+        # Just before: return result_data
+        print(f"DEBUG {domain}:")
+        print(f"  base_score: {base_score}")
+        print(f"  directory_result: {directory_result}")
+        print(f"  enhanced_score: {enhanced_score}")
 
         return result_data
 
@@ -416,14 +527,6 @@ def scan_domains_concurrent(domains_to_scan: List[str], ethical: bool,
                           max_workers: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Scan multiple domains concurrently using ThreadPoolExecutor
-
-    Args:
-        domains_to_scan: List of domains to scan
-        ethical: Whether to use ethical scanning mode
-        max_workers: Maximum number of worker threads (auto-calculated if None)
-
-    Returns:
-        List of scan results
     """
     if not domains_to_scan:
         return []
@@ -482,13 +585,6 @@ def scan_domains_concurrent(domains_to_scan: List[str], ethical: bool,
 def monitor_system_resources(threshold_cpu: float = 80.0, threshold_ram: float = 85.0) -> Dict[str, Any]:
     """
     Monitor system resources during scanning
-
-    Args:
-        threshold_cpu: CPU usage threshold (%)
-        threshold_ram: RAM usage threshold (%)
-
-    Returns:
-        Dictionary with resource status
     """
     try:
         cpu_percent = psutil.cpu_percent(interval=1)
@@ -544,83 +640,6 @@ def test_scanners():
     print(f"System status: {'Healthy' if resources.get('system_healthy') else 'Overloaded'}")
 
     print("All tests completed successfully!")
-
-def enhanced_ssl_analysis(domain: str):
-    """Enhanced SSL/TLS analysis"""
-    import ssl
-    import socket
-    from datetime import datetime, timezone
-    
-    result = {
-        "domain": domain,
-        "grade": "F",
-        "issues": [],
-        "certificate": {}
-    }
-    
-    try:
-        context = ssl.create_default_context()
-        
-        with socket.create_connection((domain, 443), timeout=10) as sock:
-            with context.wrap_socket(sock, server_hostname=domain) as ssock:
-                cert = ssock.getpeercert()
-                
-                # Certificate details
-                result["certificate"] = {
-                    "subject": dict(x[0] for x in cert['subject']),
-                    "issuer": dict(x[0] for x in cert['issuer']),
-                    "not_before": cert['notBefore'],
-                    "not_after": cert['notAfter']
-                }
-                
-                # Check expiry
-                expiry = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
-                expiry = expiry.replace(tzinfo=timezone.utc)
-                days_left = (expiry - datetime.now(timezone.utc)).days
-                
-                if days_left < 0:
-                    result["issues"].append("CRITICAL: Certificate expired")
-                    result["grade"] = "F"
-                elif days_left < 30:
-                    result["issues"].append(f"WARNING: Certificate expires in {days_left} days")
-                    result["grade"] = "C"
-                else:
-                    result["grade"] = "A"
-                    
-    except Exception as e:
-        result["issues"].append(f"SSL Error: {str(e)}")
-        
-    return result
-
-def calculate_advanced_score(ports: str, vulns: list = None, ssl_grade: str = "F") -> int:
-    """Enhanced risk scoring"""
-    score = 0
-    
-    # Port-based scoring
-    if ports:
-        port_list = ports.split(',')
-        for port in port_list:
-            if port in ["21", "22", "23", "135", "445", "3389"]:
-                score += 10
-            else:
-                score += 2
-    
-    # Vulnerability scoring
-    if vulns:
-        for vuln in vulns:
-            severity = vuln.get("severity", "").lower()
-            if severity == "critical":
-                score += 15
-            elif severity == "high":
-                score += 10
-    
-    # SSL scoring
-    if ssl_grade == "F":
-        score += 10
-    elif ssl_grade == "C":
-        score += 5
-    
-    return min(100, score)
 
 if __name__ == "__main__":
     test_scanners()

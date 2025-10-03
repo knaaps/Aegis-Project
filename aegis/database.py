@@ -1,7 +1,7 @@
 """
 Simplified Database Module for Aegis-Lite
 ==========================================
-Reduced from 400+ lines to ~150 lines while maintaining functionality
+Optimized version with duplicate functions removed
 """
 
 import sqlite3
@@ -21,6 +21,7 @@ def init_db() -> None:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
+            # Create table if it doesn't exist
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS assets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,9 +31,18 @@ def init_db() -> None:
                     score INTEGER DEFAULT 0,
                     ssl_vulnerabilities TEXT DEFAULT '{}',
                     web_vulnerabilities TEXT DEFAULT '{}',
+                    directory_discovery TEXT DEFAULT '{}',
                     last_scanned TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # Check if directory_discovery column exists, add if missing
+            cursor.execute("PRAGMA table_info(assets)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'directory_discovery' not in columns:
+                logger.info("Adding directory_discovery column to existing database")
+                cursor.execute("ALTER TABLE assets ADD COLUMN directory_discovery TEXT DEFAULT '{}'")
 
             cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_domain ON assets (domain)")
             conn.commit()
@@ -42,9 +52,33 @@ def init_db() -> None:
         logger.error(f"Database initialization failed: {e}")
         raise
 
+def database_exists() -> bool:
+    """Check if the database file exists."""
+    return os.path.exists(DB_FILE)
+
+def table_exists() -> bool:
+    """Check if the assets table exists in the database."""
+    if not database_exists():
+        return False
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='assets'")
+            return cursor.fetchone() is not None
+    except sqlite3.Error:
+        return False
+
+def ensure_database_initialized():
+    """Ensure database and table exist, create them if they don't."""
+    if not table_exists():
+        logger.info("Database or table missing. Initializing...")
+        init_db()
+
 def save_asset(domain: str, ip: str = "TBD", ports: str = "", score: int = 0,
-               ssl_vulnerabilities: str = "{}", web_vulnerabilities: str = "{}") -> bool:
+               ssl_vulnerabilities: str = "{}", web_vulnerabilities: str = "{}",
+               directory_discovery: str = "{}") -> bool:  # FIXED: Added directory_discovery parameter
     """Insert or update asset in database"""
+    ensure_database_initialized()
     if not validate_domain(domain) or not validate_ip(ip):
         logger.error(f"Invalid input: domain={domain}, ip={ip}")
         return False
@@ -55,12 +89,12 @@ def save_asset(domain: str, ip: str = "TBD", ports: str = "", score: int = 0,
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO assets
-                (domain, ip, ports, score, ssl_vulnerabilities, web_vulnerabilities, last_scanned)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (domain, ip, ports, score, ssl_vulnerabilities, web_vulnerabilities))
-            conn.commit()
+                (domain, ip, ports, score, ssl_vulnerabilities, web_vulnerabilities, directory_discovery, last_scanned)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (domain, ip, ports, score, ssl_vulnerabilities, web_vulnerabilities, directory_discovery))
+            conn.commit()  # FIXED: Added commit
             logger.info(f"Asset {domain} saved successfully")
-            return True
+            return True  # FIXED: Added return True
 
     except Exception as e:
         logger.error(f"Failed to save asset {domain}: {e}")
@@ -69,6 +103,7 @@ def save_asset(domain: str, ip: str = "TBD", ports: str = "", score: int = 0,
 def get_assets(limit: int = None, min_score: int = None, max_score: int = None,
                order_by: str = "last_scanned DESC") -> List[Dict[str, Any]]:
     """Flexible asset retrieval with optional filters"""
+    ensure_database_initialized()
     try:
         with sqlite3.connect(DB_FILE) as conn:
             conn.row_factory = sqlite3.Row
@@ -105,6 +140,7 @@ def get_all_assets() -> List[Dict[str, Any]]:
 
 def get_asset_by_domain(domain: str) -> Optional[Dict[str, Any]]:
     """Get specific asset by domain"""
+    ensure_database_initialized()
     if not validate_domain(domain):
         return None
 
@@ -122,6 +158,7 @@ def get_asset_by_domain(domain: str) -> Optional[Dict[str, Any]]:
 
 def get_db_stats() -> Dict[str, Any]:
     """Get database statistics with correct risk categorization"""
+    ensure_database_initialized()
     try:
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
@@ -171,6 +208,7 @@ def clear_db() -> bool:
 
 def delete_asset(domain: str) -> bool:
     """Delete specific asset"""
+    ensure_database_initialized()
     if not validate_domain(domain):
         return False
 
@@ -187,23 +225,6 @@ def delete_asset(domain: str) -> bool:
     except sqlite3.Error as e:
         logger.error(f"Failed to delete asset {domain}: {e}")
         return False
-
-# Convenience functions for backward compatibility
-def insert_asset(domain: str, **kwargs) -> bool:
-    """Backward compatibility wrapper"""
-    return save_asset(domain, **kwargs)
-
-def get_recent_assets(limit: int = 10) -> List[Dict[str, Any]]:
-    """Get recent assets"""
-    return get_assets(limit=limit)
-
-def get_critical_assets() -> List[Dict[str, Any]]:
-    """Get critical risk assets"""
-    return get_assets(min_score=RISK_THRESHOLDS['critical'])
-
-def get_high_risk_assets() -> List[Dict[str, Any]]:
-    """Get high risk assets"""
-    return get_assets(min_score=RISK_THRESHOLDS['high'], max_score=RISK_THRESHOLDS['critical']-1)
 
 def _empty_stats() -> Dict[str, Any]:
     """Return empty statistics"""

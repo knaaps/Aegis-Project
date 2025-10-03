@@ -1,6 +1,10 @@
 # Aegis Requirements -
 # Essential dependencies
 
+plotly>=5.0.0
+python-nmap>=0.7.1
+reportlab>=4.0.0
+
 # Core CLI framework
 click==8.1.7
 

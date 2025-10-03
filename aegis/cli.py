@@ -237,13 +237,15 @@ def finalize_scan(scan_stats: Dict[str, Any], success: bool, error_msg: str = No
     print(f"{'='*60}")
     return scan_stats
 
-# Initialize database
-try:
-    database.init_db()
-    print("Database initialized successfully")
-except Exception as e:
-    print(f"Database initialization failed: {e}")
-    exit(1)
+def initialize_database():
+    """Initialize database on demand"""
+    try:
+        database.init_db()
+        print("Database initialized successfully")
+        return True
+    except Exception as e:
+        print(f"Database initialization failed: {e}")
+        return False
 
 @click.group()
 def cli():
@@ -259,6 +261,10 @@ def cli():
 @click.option("--sequential", is_flag=True, help="Use sequential scanning instead of threading")
 def scan(domain, ethical, monitor, max_subdomains, max_workers, sequential):
     """Scan a domain for subdomains and security issues"""
+
+    # Initialize database here instead of on import
+    if not initialize_database():
+        exit(1)
 
     # Show threading information
     if not sequential:
