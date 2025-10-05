@@ -1,5 +1,4 @@
 FROM python:3.10-slim
-
 WORKDIR /app
 
 # Install system dependencies
@@ -7,17 +6,19 @@ RUN apt-get update && apt-get install -y \
     nmap \
     git \
     wget \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Go-based security tools
-RUN wget https://github.com/projectdiscovery/subfinder/releases/download/v2.6.3/subfinder_2.6.3_linux_amd64.tar.gz \
-    && tar -xzf subfinder_2.6.3_linux_amd64.tar.gz \
+# Install Subfinder (FIXED VERSION)
+RUN wget https://github.com/projectdiscovery/subfinder/releases/download/v2.6.6/subfinder_2.6.6_linux_amd64.zip \
+    && apt-get update && apt-get install -y unzip \
+    && unzip subfinder_2.6.6_linux_amd64.zip \
     && mv subfinder /usr/local/bin/ \
-    && rm subfinder_2.6.3_linux_amd64.tar.gz
+    && rm subfinder_2.6.6_linux_amd64.zip \
+    && chmod +x /usr/local/bin/subfinder
 
 # Copy application
 COPY . .
-COPY aegis/ ./aegis/
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -28,5 +29,5 @@ ENV PYTHONPATH=/app
 # Expose Streamlit port
 EXPOSE 8501
 
-# Default command - can run either CLI or UI
-CMD ["python", "-m", "aegis.cli", "interactive"]
+# Default command
+CMD ["streamlit", "run", "aegis/ui.py", "--server.port=8501", "--server.address=0.0.0.0"]

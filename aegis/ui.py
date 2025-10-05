@@ -1,7 +1,7 @@
 """
 Aegis-Lite Security Scanner
 ===========================
-Clean, minimal interface with subtle cyber aesthetic
+Clean, minimal interface 
 """
 
 import streamlit as st
@@ -14,10 +14,9 @@ from aegis.database import get_all_assets, get_db_stats, init_db, clear_db
 from aegis.cli import run_scan_logic
 from aegis.utils import get_risk_level, safe_json_parse
 
-
 # Clean, minimal theme
 def apply_clean_theme():
-    """Apply clean, minimal styling inspired by MonkeyType"""
+    """styling inspired by MonkeyType"""
     st.markdown("""
     <style>
     /* Clean dark theme */
@@ -147,29 +146,40 @@ def apply_clean_theme():
         border: 1px solid #333 !important;
         border-radius: 6px;
     }
+
+    div[data-baseweb="tab-list"] {
+        display: flex !important;
+        justify-content: space-between !important;
+    }
+
+    button[data-baseweb="tab"] {
+        flex: 1 !important;
+        text-align: center !important;
+    }
+
     </style>
     """, unsafe_allow_html=True)
 
 def show_ascii_header():
-    """Display clean ASCII art header"""
+    """ASCII art header"""
     st.markdown("""
-    <div style="text-align: center; font-family: 'Consolas', monospace; color: #00d4aa; line-height: 1.2; margin: 20px 0;">
+    <div style="text-align: center; font-family: 'Consolas', monospace; color: #00d4aa; line-height: 1.2; margin: 20px 0; white-space: pre;">
     <pre style="margin: 0; font-size: 1em;">
-     █████╗   ███████╗   ██████╗   ██╗  ███████╗                                                    
-    ██╔══██╗  ██╔════╝  ██╔════╝   ██║  ██╔════╝                                                    
-    ███████║  █████╗    ██║  ███╗  ██║  ███████╗                                                    
-    ██╔══██║  ██╔══╝    ██║   ██║  ██║  ╚════██║                                                    
-    ██║  ██║  ███████╗  ╚██████╔╝  ██║  ███████║                                                    
-    ╚═╝  ╚═╝  ╚══════╝   ╚═════╝   ╚═╝  ╚══════╝                                                    
+                       █████╗ ███████╗ ██████╗ ██╗███████╗                                                        
+                      ██╔══██╗██╔════╝██╔════╝ ██║██╔════╝                                                        
+                      ███████║█████╗  ██║  ███╗██║███████╗                                                        
+                      ██╔══██║██╔══╝  ██║   ██║██║╚════██║                                                        
+                      ██║  ██║███████╗╚██████╔╝██║███████║                                                        
+                      ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝╚══════╝                                                        
     </pre>
-    <div style="color: #888; margin-top: 10px; font-size: 0.9em;">
+    <sub><div style="color: #888; margin-top: 1px; font-size: 1.2em;">
     Security Scanner for Small-Medium Enterprises
-    </div>
+    </sub></div>
     </div>
     """, unsafe_allow_html=True)
 
 def show_system_info():
-    """Display clean system information"""
+    """Display system information"""
     try:
         import psutil
         cpu = psutil.cpu_percent(interval=1)

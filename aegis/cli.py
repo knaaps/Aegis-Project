@@ -18,9 +18,22 @@ from aegis.database import get_all_assets, get_db_stats
 from aegis.utils import validate_domain, clean_input
 
 from aegis.scanners import (
-    run_subfinder, scan_domains_concurrent, show_system_resources,
+    filter_valid_subdomains, run_subfinder, scan_domains_concurrent, show_system_resources,
     monitor_system_resources, get_optimal_thread_count
 )
+
+def show_banner():
+    """Display clean ASCII banner"""
+    banner = r"""
+    ___    _____________________
+   /   |  / ____/ ____/  _/ ___/
+  / /| | / __/ / / __ / / \__ \ 
+ / ___ |/ /___/ /_/ // / ___/ / 
+/_/  |_/_____/\____/___//____/  
+    """
+    print(banner)
+    print("Aegis-Lite Security Scanner")
+    print("=" * 40)
 
 def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: int = None,
                    max_workers: int = None, use_threading: bool = True) -> Dict[str, Any]:
@@ -74,9 +87,14 @@ def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: in
 
         subdomains = run_subfinder(domain, timeout=120)
 
+        if len(subdomains) > 20:  # Only filter if we have many subdomains
+            print(f"[1.5/4] Filtering {len(subdomains)} subdomains for reachability...")
+            subdomains = filter_valid_subdomains(subdomains[:100])
+            print(f"Found {len(subdomains)} reachable subdomains")
+
         if max_subdomains and len(subdomains) > max_subdomains:
             subdomains = subdomains[:max_subdomains]
-            print(f"Limited to first {max_subdomains} subdomains")
+            print(f"Limited to {max_subdomains} subdomains")
 
         scan_stats["subdomains_found"] = len(subdomains)
 
@@ -115,7 +133,8 @@ def run_scan_logic(domain: str, ethical: bool, monitor: bool, max_subdomains: in
                         ports=result["ports"],
                         score=result["score"],
                         ssl_vulnerabilities=result["ssl_vulnerabilities"],
-                        web_vulnerabilities=result["web_vulnerabilities"]
+                        web_vulnerabilities=result["web_vulnerabilities"],
+                        directory_discovery=result.get("directory_discovery", "{}")
                     )
                     if success:
                         saved_count += 1
@@ -256,7 +275,7 @@ def cli():
 @click.argument("domain")
 @click.option("--ethical", is_flag=True, default=True, help="Use ethical scanning mode")
 @click.option("--monitor", is_flag=True, help="Show system resource usage")
-@click.option("--max-subdomains", type=int, help="Limit number of subdomains to scan")
+@click.option("--max-subdomains", default=10, type=int, help="Limit number of subdomains to scan (default:10)")
 @click.option("--max-workers", type=int, help="Maximum number of worker threads")
 @click.option("--sequential", is_flag=True, help="Use sequential scanning instead of threading")
 def scan(domain, ethical, monitor, max_subdomains, max_workers, sequential):
@@ -518,78 +537,91 @@ def system_info():
 @cli.command()
 def interactive():
     """Start interactive mode for easier use"""
-    print("Welcome to Aegis-Lite Interactive Mode!")
-    print("Enhanced with Threading Support 🧵")
-    print()
-
+    show_banner()
+    
     while True:
         try:
-            print("--- Main Menu --- \n1. Scan a domain \n2. View results \n3. Generate report \n4. Export data \n5. Clear database \n6. System information \n7. Performance benchmark \n8. Exit")
-            choice = input("\nEnter your choice (1-8): ").strip()
+            # Clean menu layout
+            print("\n" + "="*50)
+            print("MAIN MENU")
+            print("="*50)
+            print("1. Scan a domain")
+            print("2. View results") 
+            print("3. Generate report")
+            print("4. Export data")
+            print("5. Clear database")
+            print("6. System information")
+            print("7. Performance benchmark")
+            print("8. Exit")
+            print("-"*50)
+            
+            choice = input("Enter your choice (1-8): ").strip()
 
             if choice == "1":
-                domain = input("Enter domain to scan (e.g., example.com): ").strip()
+                print("\n--- DOMAIN SCAN ---")
+                domain = input("Domain to scan (e.g., example.com): ").strip()
                 if domain:
-                    ethical = input("Use ethical mode? (Y/n): ").strip().lower() != 'n'
-                    monitor = input("Monitor resources? (y/N): ").strip().lower() == 'y'
-                    threading = input("Enable threading? (Y/n): ").strip().lower() != 'n'
-
+                    print("\nScan Options:")
+                    ethical = input("Ethical mode? [Y/n]: ").strip().lower() != 'n'
+                    monitor = input("Monitor resources? [y/N]: ").strip().lower() == 'y'
+                    threading = input("Enable threading? [Y/n]: ").strip().lower() != 'n'
+                    
+                    max_workers = None
                     if threading:
-                        max_workers = input("Max worker threads (press Enter for auto): ").strip()
-                        max_workers = int(max_workers) if max_workers.isdigit() else None
-                    else:
-                        max_workers = None
+                        workers = input("Max worker threads [Enter for auto]: ").strip()
+                        max_workers = int(workers) if workers.isdigit() else None
 
-                    result = run_scan_logic(domain, ethical, monitor,
-                                          use_threading=threading, max_workers=max_workers)
-                    if not result.get("success", False):
-                        print("Scan failed. Check output above.")
-                else:
-                    print("Please enter a domain name.")
-
+                    result = run_scan_logic(domain, ethical, monitor, use_threading=threading, max_workers=max_workers)
+                    
             elif choice == "2":
-                format_choice = input("Display format (table/json/csv) [table]: ").strip() or "table"
+                print("\n--- VIEW RESULTS ---")
+                format_choice = input("Format (table/json/csv) [table]: ").strip() or "table"
                 subprocess.run(["python", "-m", "aegis.cli", "view", "--format", format_choice])
 
             elif choice == "3":
+                print("\n--- GENERATING REPORT ---")
                 subprocess.run(["python", "-m", "aegis.cli", "report"])
 
             elif choice == "4":
-                format_choice = input("Export format (json/csv) [json]: ").strip() or "json"
-                filename = input("Filename (optional): ").strip()
+                print("\n--- EXPORT DATA ---")
+                format_choice = input("Format (json/csv) [json]: ").strip() or "json"
+                filename = input("Filename [optional]: ").strip()
                 cmd = ["python", "-m", "aegis.cli", "export", format_choice]
                 if filename:
                     cmd.extend(["-o", filename])
                 subprocess.run(cmd)
 
             elif choice == "5":
-                confirm = input("Are you sure you want to clear all data? (yes/no): ").strip().lower()
+                print("\n--- CLEAR DATABASE ---")
+                confirm = input("Clear ALL data? [yes/NO]: ").strip().lower()
                 if confirm == "yes":
                     subprocess.run(["python", "-m", "aegis.cli", "clear", "--yes"])
                 else:
                     print("Operation cancelled.")
 
             elif choice == "6":
+                print("\n--- SYSTEM INFORMATION ---")
                 subprocess.run(["python", "-m", "aegis.cli", "system-info"])
 
             elif choice == "7":
-                print("Running performance benchmark...")
+                print("\n--- PERFORMANCE BENCHMARK ---")
                 subprocess.run(["python", "-m", "aegis.cli", "benchmark"])
 
             elif choice == "8":
-                print("Thank you for using Aegis-Lite!")
+                print("\nThank you for using Aegis-Lite!")
                 break
 
             else:
                 print("Invalid choice. Please select 1-8.")
 
         except KeyboardInterrupt:
-            print("\nExiting...")
+            print("\n\nExiting Aegis-Lite...")
             break
         except Exception as e:
             print(f"Error: {e}")
 
-        print()  # Add spacing
+        # Small pause before redisplaying menu
+        input("\nPress Enter to continue...")
 
 @cli.command()
 @click.option("--domains", default=3, help="Number of test domains")

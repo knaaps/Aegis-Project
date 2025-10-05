@@ -76,6 +76,28 @@ def run_subfinder(domain: str, timeout: int = 120) -> List[str]:
         safe_print(f"Subfinder error: {e}")
         return []
 
+def filter_valid_subdomains(subdomains: List[str], max_workers: int = 5) -> List[str]:
+    """Quickly filter out unreachable subdomains using DNS resolution"""
+    valid = []
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_domain = {
+            executor.submit(resolve_ip, sub, timeout=10): sub  # Changed from 3 to 10
+            for sub in subdomains
+        }
+        
+        for future in as_completed(future_to_domain):
+            subdomain = future_to_domain[future]
+            try:
+                ip = future.result()
+                if ip != "Unknown":
+                    valid.append(subdomain)
+            except:
+                continue
+    
+    safe_print(f"Filtered to {len(valid)} reachable subdomains from {len(subdomains)} candidates")
+    return valid
+
 def run_nmap(ip: str, domain: str, ethical: bool = True) -> str:
     """Run nmap port scan"""
     if not validate_ip(ip):
@@ -138,56 +160,52 @@ def resolve_ip(domain: str, timeout: int = 10) -> str:
 def calculate_score(ports: str, vulns: list = None, https_data: dict = None, 
                    directory_data: dict = None) -> int:
     """
-    Proper risk scoring based on actual security issues
+    Enhanced risk scoring with proper weighting
     """
-
-    logger.info(f"calculate_score called: ports={ports}, vulns={vulns}")
-
     score = 0
     
-    # 1. VULNERABILITY SEVERITY (highest priority)
+    # 1. CRITICAL: Actual vulnerabilities (70-90 points)
     if vulns:
         cvss_scores = [v.get("cvss_score", 0) for v in vulns if v.get("cvss_score")]
         if cvss_scores:
-            # Critical vulnerabilities should dominate the score
             max_cvss = max(cvss_scores)
             score += int(max_cvss * 10)  # CVSS 9.0 = 90 points
     
-    # 2. EXPOSED ADMIN PANELS / SENSITIVE FILES (critical)
+    # 2. HIGH: Exposed sensitive resources (40-60 points)
     if directory_data:
         admin_count = len(directory_data.get('admin_panels', []))
         sensitive_count = len(directory_data.get('sensitive_files', []))
         score += (admin_count * 15) + (sensitive_count * 20)
     
-    # 3. DANGEROUS SERVICES (medium priority)
-    if ports:
+    # 3. MEDIUM: Dangerous services (20-40 points)
+    if ports and score < 50:  # Only if not already high risk
         port_list = [p.strip() for p in ports.split(',') if p.strip()]
         dangerous_ports = {
             "21": 15,   # FTP
-            "22": 10,   # SSH (acceptable if secured)
-            "23": 25,   # Telnet (unencrypted!)
+            "22": 10,   # SSH
+            "23": 25,   # Telnet
             "135": 20,  # RPC
             "445": 20,  # SMB
             "3306": 15, # MySQL
             "3389": 15, # RDP
-            "5432": 15  # PostgreSQL
+            "5432": 15, # PostgreSQL
+            "8080": 5   # Alt HTTP
         }
-        
         for port in port_list:
             score += dangerous_ports.get(port, 0)
     
-    # 4. HTTPS ISSUES (lower priority but still relevant)
+    # 4. LOW: HTTPS/TLS issues (10-20 points)
     if https_data:
         if not https_data.get('has_https'):
-            score += 10  # No HTTPS at all
+            score += 10
         elif not https_data.get('valid_cert'):
-            score += 15  # Invalid certificate
+            score += 15
         elif https_data.get('cert_expires_soon'):
-            score += 5   # Expiring soon
+            score += 5
     
-    # 5. PORT 8080 (often indicates misconfiguration)
-    if ports and '8080' in ports:
-        score += 5  # Minor risk - alternative HTTP port
+    # 5. BASELINE: Any internet-facing service gets minimum score
+    if ports and score == 0:
+        score = 5  # Basic exposure risk
     
     return min(100, score)
 
@@ -509,12 +527,6 @@ def scan_single_domain(domain: str, ethical: bool, scan_stats: Dict[str, Any],
         with stats_lock:
             scan_stats["successful_scans"] += 1
 
-        # Just before: return result_data
-        print(f"DEBUG {domain}:")
-        print(f"  base_score: {base_score}")
-        print(f"  directory_result: {directory_result}")
-        print(f"  enhanced_score: {enhanced_score}")
-
         return result_data
 
     except Exception as e:
@@ -565,16 +577,13 @@ def scan_domains_concurrent(domains_to_scan: List[str], ethical: bool,
         }
 
         # Collect results as they complete
-        for future in as_completed(future_to_domain):
-            domain = future_to_domain[future]
+        for future in as_completed(future_to_domain, timeout=300):  # 5 min max per domain
             try:
-                result = future.result()
+                result = future.result(timeout=120)  # 2 min per scan
                 if result:
                     results.append(result)
-            except Exception as e:
-                safe_print(f"Thread exception for {domain}: {e}")
-                with stats_lock:
-                    scan_stats["failed_scans"] += 1
+            except (TimeoutError, FutureTimeoutError):
+                safe_print(f"Timeout scanning {future_to_domain[future]}")
 
     safe_print(f"\nConcurrent scan completed:")
     safe_print(f"  Successful: {scan_stats['successful_scans']}")

@@ -1,7 +1,7 @@
 """
-Simplified Database Module for Aegis-Lite
+Simplified Database Module for Aegis-Lite - FIXED
 ==========================================
-Optimized version with duplicate functions removed
+Fixed unclosed database connection warnings
 """
 
 import sqlite3
@@ -14,43 +14,52 @@ logger = logging.getLogger(__name__)
 
 DB_FILE = "aegis.db"
 
+def get_connection():
+    """Get database connection with row factory"""
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def init_db() -> None:
     """Initialize database with proper table structure"""
+    conn = None
     try:
-        with sqlite3.connect(DB_FILE) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+        conn = get_connection()
+        cursor = conn.cursor()
 
-            # Create table if it doesn't exist
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS assets (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    domain TEXT NOT NULL UNIQUE,
-                    ip TEXT,
-                    ports TEXT,
-                    score INTEGER DEFAULT 0,
-                    ssl_vulnerabilities TEXT DEFAULT '{}',
-                    web_vulnerabilities TEXT DEFAULT '{}',
-                    directory_discovery TEXT DEFAULT '{}',
-                    last_scanned TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+        # Create table if it doesn't exist
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                domain TEXT NOT NULL UNIQUE,
+                ip TEXT,
+                ports TEXT,
+                score INTEGER DEFAULT 0,
+                ssl_vulnerabilities TEXT DEFAULT '{}',
+                web_vulnerabilities TEXT DEFAULT '{}',
+                directory_discovery TEXT DEFAULT '{}',
+                last_scanned TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-            # Check if directory_discovery column exists, add if missing
-            cursor.execute("PRAGMA table_info(assets)")
-            columns = [column[1] for column in cursor.fetchall()]
-            
-            if 'directory_discovery' not in columns:
-                logger.info("Adding directory_discovery column to existing database")
-                cursor.execute("ALTER TABLE assets ADD COLUMN directory_discovery TEXT DEFAULT '{}'")
+        # Check if directory_discovery column exists, add if missing
+        cursor.execute("PRAGMA table_info(assets)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'directory_discovery' not in columns:
+            logger.info("Adding directory_discovery column to existing database")
+            cursor.execute("ALTER TABLE assets ADD COLUMN directory_discovery TEXT DEFAULT '{}'")
 
-            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_domain ON assets (domain)")
-            conn.commit()
-            logger.info("Database initialized successfully")
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_domain ON assets (domain)")
+        conn.commit()
+        logger.info("Database initialized successfully")
 
     except sqlite3.Error as e:
         logger.error(f"Database initialization failed: {e}")
         raise
+    finally:
+        if conn:
+            conn.close()
 
 def database_exists() -> bool:
     """Check if the database file exists."""
@@ -60,13 +69,17 @@ def table_exists() -> bool:
     """Check if the assets table exists in the database."""
     if not database_exists():
         return False
+    conn = None
     try:
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='assets'")
-            return cursor.fetchone() is not None
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='assets'")
+        return cursor.fetchone() is not None
     except sqlite3.Error:
         return False
+    finally:
+        if conn:
+            conn.close()
 
 def ensure_database_initialized():
     """Ensure database and table exist, create them if they don't."""
@@ -76,63 +89,70 @@ def ensure_database_initialized():
 
 def save_asset(domain: str, ip: str = "TBD", ports: str = "", score: int = 0,
                ssl_vulnerabilities: str = "{}", web_vulnerabilities: str = "{}",
-               directory_discovery: str = "{}") -> bool:  # FIXED: Added directory_discovery parameter
+               directory_discovery: str = "{}") -> bool:
     """Insert or update asset in database"""
     ensure_database_initialized()
     if not validate_domain(domain) or not validate_ip(ip):
         logger.error(f"Invalid input: domain={domain}, ip={ip}")
         return False
 
+    conn = None
     try:
         score = max(0, min(100, int(score)))  # Clamp between 0-100
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT OR REPLACE INTO assets
-                (domain, ip, ports, score, ssl_vulnerabilities, web_vulnerabilities, directory_discovery, last_scanned)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (domain, ip, ports, score, ssl_vulnerabilities, web_vulnerabilities, directory_discovery))
-            conn.commit()  # FIXED: Added commit
-            logger.info(f"Asset {domain} saved successfully")
-            return True  # FIXED: Added return True
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO assets
+            (domain, ip, ports, score, ssl_vulnerabilities, web_vulnerabilities, directory_discovery, last_scanned)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (domain, ip, ports, score, ssl_vulnerabilities, web_vulnerabilities, directory_discovery))
+        conn.commit()
+        logger.info(f"Asset {domain} saved successfully")
+        return True
 
     except Exception as e:
         logger.error(f"Failed to save asset {domain}: {e}")
         return False
+    finally:
+        if conn:
+            conn.close()
 
 def get_assets(limit: int = None, min_score: int = None, max_score: int = None,
                order_by: str = "last_scanned DESC") -> List[Dict[str, Any]]:
     """Flexible asset retrieval with optional filters"""
     ensure_database_initialized()
+    conn = None
     try:
-        with sqlite3.connect(DB_FILE) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
+        conn = get_connection()
+        cursor = conn.cursor()
 
-            query = "SELECT * FROM assets"
-            params = []
+        query = "SELECT * FROM assets"
+        params = []
 
-            # Add score range filter if specified
-            if min_score is not None or max_score is not None:
-                min_score = min_score or 0
-                max_score = max_score or 100
-                query += " WHERE score BETWEEN ? AND ?"
-                params.extend([min_score, max_score])
+        # Add score range filter if specified
+        if min_score is not None or max_score is not None:
+            min_score = min_score or 0
+            max_score = max_score or 100
+            query += " WHERE score BETWEEN ? AND ?"
+            params.extend([min_score, max_score])
 
-            query += f" ORDER BY {order_by}"
+        query += f" ORDER BY {order_by}"
 
-            if limit:
-                query += " LIMIT ?"
-                params.append(limit)
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
 
-            cursor.execute(query, params)
-            assets = [dict(row) for row in cursor.fetchall()]
-            logger.info(f"Retrieved {len(assets)} assets")
-            return assets
+        cursor.execute(query, params)
+        assets = [dict(row) for row in cursor.fetchall()]
+        logger.info(f"Retrieved {len(assets)} assets")
+        return assets
 
     except sqlite3.Error as e:
         logger.error(f"Failed to retrieve assets: {e}")
         return []
+    finally:
+        if conn:
+            conn.close()
 
 def get_all_assets() -> List[Dict[str, Any]]:
     """Get all assets for backward compatibility"""
@@ -144,56 +164,63 @@ def get_asset_by_domain(domain: str) -> Optional[Dict[str, Any]]:
     if not validate_domain(domain):
         return None
 
+    conn = None
     try:
-        with sqlite3.connect(DB_FILE) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM assets WHERE domain = ?", (domain,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM assets WHERE domain = ?", (domain,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
     except sqlite3.Error as e:
         logger.error(f"Failed to get asset {domain}: {e}")
         return None
+    finally:
+        if conn:
+            conn.close()
 
 def get_db_stats() -> Dict[str, Any]:
     """Get database statistics with correct risk categorization"""
     ensure_database_initialized()
+    conn = None
     try:
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT
-                    COUNT(*) as total_assets,
-                    COALESCE(AVG(score), 0) as avg_score,
-                    COUNT(CASE WHEN score >= ? THEN 1 END) as critical_risk_assets,
-                    COUNT(CASE WHEN score >= ? AND score < ? THEN 1 END) as high_risk_assets,
-                    COUNT(CASE WHEN score >= ? AND score < ? THEN 1 END) as medium_risk_assets,
-                    COUNT(CASE WHEN score >= ? AND score < ? THEN 1 END) as low_risk_assets
-                FROM assets
-            """, (
-                RISK_THRESHOLDS['critical'],
-                RISK_THRESHOLDS['high'], RISK_THRESHOLDS['critical'],
-                RISK_THRESHOLDS['medium'], RISK_THRESHOLDS['high'],
-                RISK_THRESHOLDS['low'], RISK_THRESHOLDS['medium']
-            ))
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total_assets,
+                COALESCE(AVG(score), 0) as avg_score,
+                COUNT(CASE WHEN score >= ? THEN 1 END) as critical_risk_assets,
+                COUNT(CASE WHEN score >= ? AND score < ? THEN 1 END) as high_risk_assets,
+                COUNT(CASE WHEN score >= ? AND score < ? THEN 1 END) as medium_risk_assets,
+                COUNT(CASE WHEN score >= ? AND score < ? THEN 1 END) as low_risk_assets
+            FROM assets
+        """, (
+            RISK_THRESHOLDS['critical'],
+            RISK_THRESHOLDS['high'], RISK_THRESHOLDS['critical'],
+            RISK_THRESHOLDS['medium'], RISK_THRESHOLDS['high'],
+            RISK_THRESHOLDS['low'], RISK_THRESHOLDS['medium']
+        ))
 
-            row = cursor.fetchone()
-            if row:
-                return {
-                    'total_assets': row[0],
-                    'avg_score': round(row[1], 2),
-                    'critical_risk_assets': row[2],
-                    'high_risk_assets': row[3],
-                    'medium_risk_assets': row[4],
-                    'low_risk_assets': row[5]
-                }
-            else:
-                return _empty_stats()
+        row = cursor.fetchone()
+        if row:
+            return {
+                'total_assets': row[0],
+                'avg_score': round(row[1], 2),
+                'critical_risk_assets': row[2],
+                'high_risk_assets': row[3],
+                'medium_risk_assets': row[4],
+                'low_risk_assets': row[5]
+            }
+        else:
+            return _empty_stats()
 
     except sqlite3.Error as e:
         logger.error(f"Failed to get stats: {e}")
         return _empty_stats()
+    finally:
+        if conn:
+            conn.close()
 
 def clear_db() -> bool:
     """Delete database file"""
@@ -212,19 +239,23 @@ def delete_asset(domain: str) -> bool:
     if not validate_domain(domain):
         return False
 
+    conn = None
     try:
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM assets WHERE domain = ?", (domain,))
-            success = cursor.rowcount > 0
-            conn.commit()
-            if success:
-                logger.info(f"Deleted asset: {domain}")
-            return success
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM assets WHERE domain = ?", (domain,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        if success:
+            logger.info(f"Deleted asset: {domain}")
+        return success
 
     except sqlite3.Error as e:
         logger.error(f"Failed to delete asset {domain}: {e}")
         return False
+    finally:
+        if conn:
+            conn.close()
 
 def _empty_stats() -> Dict[str, Any]:
     """Return empty statistics"""

@@ -27,3 +27,31 @@ aegis = "aegis.cli:cli"
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+addopts = [
+    "--cov=aegis",
+    "--cov-report=html",
+    "--cov-report=term-missing",
+    "--cov-config=.coveragerc",  # Add this line
+    "-v"
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+omit = [
+    "*/cli.py",
+    "*/ui.py", 
+    "*/__pycache__/*",
+    "*/test_*",
+    "*/tests/*"
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError"
+]
